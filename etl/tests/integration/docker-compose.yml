@@ -1,0 +1,56 @@
+services:
+  postgres-dwh:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${DWH_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${DWH_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${DWH_POSTGRES_DB}
+      TZ: UTC
+      PGTZ: UTC
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./etl/tests/integration/init_dwh.sql:/docker-entrypoint-initdb.d/001-init-dwh.sql:ro
+    networks: [telecom-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DWH_POSTGRES_USER} -d ${DWH_POSTGRES_DB}"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  spark-etl:
+    image: spark:3.5.1-python3
+    user: "0:0"
+    entrypoint:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[2]
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2
+      - --packages
+      - org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.7.3
+      - /opt/telecom/etl/usage_etl.py
+    environment:
+      HOME: /tmp
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      DWH_POSTGRES_HOST: postgres-dwh
+      DWH_POSTGRES_PORT: 5432
+      DWH_POSTGRES_DB: ${DWH_POSTGRES_DB}
+      DWH_POSTGRES_USER: ${DWH_POSTGRES_USER}
+      DWH_POSTGRES_PASSWORD: ${DWH_POSTGRES_PASSWORD}
+      ETL_OUTPUT_PARTITIONS: 2
+    volumes:
+      - ./etl:/opt/telecom/etl:ro
+      - phase2-spark-ivy:/tmp/.ivy2
+    networks: [telecom-net]
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres-dwh:
+        condition: service_healthy
+
+volumes:
+  phase2-spark-ivy:
