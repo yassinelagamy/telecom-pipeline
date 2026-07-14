@@ -26,10 +26,10 @@ for example `http://localhost:3000/dashboard/4#refresh=600`.
   counts split by voice, SMS, and data.
 - **Top 10 Towers** (`top_10_towers.sql`) — event load plus data MB, voice
   minutes, and SMS totals for the busiest towers.
-- **Quarantine Rate Trend** (`quarantine_rate_trend.sql`) — approved SQL for
-  hourly raw/quarantine metrics. This card remains intentionally unprovisioned
-  until the ETL persists `dwh.etl_hourly_metrics`; the frozen star schema does
-  not contain raw or quarantine counts.
+- **Quarantine Rate Trend** (`quarantine_rate_trend.sql`) — hourly malformed
+  row percentage from `dwh.etl_hourly_metrics`, persisted idempotently by the
+  Airflow data-quality task. This operational table is additive and does not
+  alter the frozen star schema.
 
 ## Subscriber Insights
 
@@ -40,5 +40,5 @@ for example `http://localhost:3000/dashboard/4#refresh=600`.
   data GB, voice minutes, and SMS totals by day type.
 
 All timestamps and hourly groupings are UTC. The dashboards query the fact and
-dimension tables directly, so new successful DAG partitions appear without
-reprovisioning.
+dimension tables directly; the quarantine card reads the hourly operational
+metrics table. New successful DAG partitions appear without reprovisioning.

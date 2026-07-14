@@ -16,7 +16,8 @@ def test_dashboard_and_card_names_are_unique():
     dashboard_names = [dashboard["name"] for dashboard in dashboards]
     card_names = [card["name"] for dashboard in dashboards for card in dashboard["cards"]]
     assert dashboard_names == ["Network Ops", "Subscriber Insights"]
-    assert len(card_names) == len(set(card_names)) == 4
+    assert len(card_names) == len(set(card_names)) == 5
+    assert "Quarantine Rate Trend" in card_names
 
 
 def test_every_provisioned_card_has_sql_and_valid_layout():
@@ -34,3 +35,5 @@ def test_quarantine_query_does_not_fake_metrics_from_fact_counts():
     sql = (ROOT / "quarantine_rate_trend.sql").read_text()
     assert "dwh.etl_hourly_metrics" in sql
     assert "dwh.fact_usage_events" not in sql
+    assert "run_hour AS hour_utc" in sql
+    assert "quarantine_rate::numeric" in sql

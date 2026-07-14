@@ -27,6 +27,18 @@
             "graph.show_values": true
           },
           "layout": {"row": 8, "col": 0, "size_x": 24, "size_y": 8}
+        },
+        {
+          "name": "Quarantine Rate Trend",
+          "description": "Hourly malformed-row rate persisted by the Airflow data-quality task.",
+          "sql_file": "quarantine_rate_trend.sql",
+          "display": "line",
+          "visualization_settings": {
+            "graph.dimensions": ["hour_utc"],
+            "graph.metrics": ["quarantine_rate_pct"],
+            "graph.show_values": true
+          },
+          "layout": {"row": 16, "col": 0, "size_x": 24, "size_y": 8}
         }
       ]
     },
