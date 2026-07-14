@@ -50,3 +50,15 @@ CREATE INDEX IF NOT EXISTS fact_usage_events_subscriber_key_idx
     ON dwh.fact_usage_events (subscriber_key);
 CREATE INDEX IF NOT EXISTS fact_usage_events_tower_key_idx
     ON dwh.fact_usage_events (tower_key);
+
+-- Operational metrics written by the hourly_usage_etl DAG's DQ task (Dev A).
+-- Additive change agreed by Dev A + Dev B on 2026-07-14; feeds the
+-- quarantine-rate dashboard card (acceptance criterion #3).
+CREATE TABLE IF NOT EXISTS dwh.etl_hourly_metrics (
+    run_hour TIMESTAMPTZ PRIMARY KEY,
+    raw_rows INT NOT NULL,
+    quarantine_rows INT NOT NULL,
+    quarantine_rate DOUBLE PRECISION NOT NULL,
+    fact_rows INT NOT NULL,
+    load_ts TIMESTAMPTZ NOT NULL DEFAULT now()
+);

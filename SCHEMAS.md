@@ -109,6 +109,20 @@ CREATE INDEX ON dwh.fact_usage_events (tower_key);
 Seed volumes: **5,000 subscribers**, **200 towers**,
 `dim_date` covering **2025-01-01 → 2027-12-31**.
 
+### Additive operational table (agreed Dev A + Dev B, 2026-07-14)
+
+Not part of the analytical star schema; written by the DAG's data-quality
+task each run (upsert on `run_hour`, so reruns stay idempotent). Feeds the
+quarantine-rate dashboard card.
+
+```sql
+dwh.etl_hourly_metrics (
+    run_hour TIMESTAMPTZ PRIMARY KEY,
+    raw_rows INT, quarantine_rows INT, quarantine_rate DOUBLE PRECISION,
+    fact_rows INT, load_ts TIMESTAMPTZ DEFAULT now()
+)
+```
+
 ---
 
 ## 4. Idempotency contract (D6)

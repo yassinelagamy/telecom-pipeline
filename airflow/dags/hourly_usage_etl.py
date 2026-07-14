@@ -65,7 +65,11 @@ def raw_files_present(data_interval_start: pendulum.DateTime, **_) -> bool:
 
 
 def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
-    """Fail the run if: fact hour is empty, any FK is null, or quarantine >= 5%."""
+    """Fail the run if: fact hour is empty, any FK is null, or quarantine >= 5%.
+
+    On success, upserts the hour's metrics into dwh.etl_hourly_metrics
+    (additive ops table, see SCHEMAS.md) for the quarantine-rate dashboard.
+    """
     import psycopg2
 
     start = data_interval_start
@@ -89,25 +93,40 @@ def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
                 (start.isoformat(), end.isoformat()),
             )
             fact_rows, null_fks = cur.fetchone()
+
+        if fact_rows == 0:
+            raise ValueError(f"DQ fail: 0 fact rows for hour {start.isoformat()}")
+        if null_fks:
+            raise ValueError(f"DQ fail: {null_fks} fact rows with null dimension keys")
+
+        s3 = _s3()
+        raw_rows = _count_gzip_lines(s3, _hour_prefix("raw", start))
+        quarantine_rows = _count_gzip_lines(s3, _hour_prefix("quarantine", start))
+        rate = quarantine_rows / raw_rows if raw_rows else 1.0
+        if rate >= MAX_QUARANTINE_RATE:
+            raise ValueError(
+                f"DQ fail: quarantine rate {rate:.2%} >= {MAX_QUARANTINE_RATE:.0%} "
+                f"({quarantine_rows}/{raw_rows})")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO dwh.etl_hourly_metrics
+                       (run_hour, raw_rows, quarantine_rows, quarantine_rate, fact_rows)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (run_hour) DO UPDATE SET
+                       raw_rows = EXCLUDED.raw_rows,
+                       quarantine_rows = EXCLUDED.quarantine_rows,
+                       quarantine_rate = EXCLUDED.quarantine_rate,
+                       fact_rows = EXCLUDED.fact_rows,
+                       load_ts = now()""",
+                (start.isoformat(), raw_rows, quarantine_rows, rate, fact_rows),
+            )
+        conn.commit()
     finally:
         conn.close()
 
-    if fact_rows == 0:
-        raise ValueError(f"DQ fail: 0 fact rows for hour {start.isoformat()}")
-    if null_fks:
-        raise ValueError(f"DQ fail: {null_fks} fact rows with null dimension keys")
-
-    s3 = _s3()
-    raw_rows = _count_gzip_lines(s3, _hour_prefix("raw", start))
-    quarantine_rows = _count_gzip_lines(s3, _hour_prefix("quarantine", start))
-    rate = quarantine_rows / raw_rows if raw_rows else 1.0
-    if rate >= MAX_QUARANTINE_RATE:
-        raise ValueError(
-            f"DQ fail: quarantine rate {rate:.2%} >= {MAX_QUARANTINE_RATE:.0%} "
-            f"({quarantine_rows}/{raw_rows})")
-
     print(f"DQ ok: fact_rows={fact_rows} null_fks=0 "
-          f"quarantine={quarantine_rows}/{raw_rows} ({rate:.2%})")
+          f"quarantine={quarantine_rows}/{raw_rows} ({rate:.2%}) — metrics upserted")
 
 
 default_args = {
