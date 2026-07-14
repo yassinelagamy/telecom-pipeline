@@ -9,6 +9,8 @@ RUN apt-get update \
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
 USER airflow
+# pre-create so the spark-ivy-cache volume inherits airflow-user ownership
+RUN mkdir -p /home/airflow/.ivy2
 RUN pip install --no-cache-dir \
     apache-airflow-providers-apache-spark==4.8.2 \
     pyspark==3.5.1 \
