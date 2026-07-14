@@ -1,8 +1,58 @@
-# Metabase dashboards
+# Orange Egypt analytics dashboards
 
-The dashboard layer is defined by five reviewed SQL files and
-`dashboard_definitions.json`. `provision_metabase.py` creates or updates the
-saved questions and the **Network Ops** and **Subscriber Insights** dashboards.
+The Metabase layer provides two Orange Egypt–styled telecom dashboards backed
+by the live Postgres warehouse. The design uses Orange `#FF7900`, black,
+charcoal, white, and neutral gray throughout. All hourly timestamps are UTC.
+
+## Dashboards
+
+### Orange Egypt | Network Command Center
+
+Shared selections: **Date**, **Usage Type**, and **Region**.
+
+- KPI ribbon: total usage events, data traffic GB, voice minutes, SMS messages,
+  active towers, and the latest quarantine rate.
+- Hourly traffic trend and traffic-mix visualizations.
+- Regional performance ranking and a latitude/longitude tower map.
+- Top-10 tower ranking and an hourly quarantine-rate trend.
+- Exportable tower performance detail for investigation and drill-through.
+
+Local URL: `http://localhost:3000/dashboard/4#refresh=600`
+
+### Orange Egypt | Customer & Usage Insights
+
+Shared selections: **Date**, **Usage Type**, **Plan**, and **City**.
+
+- KPI ribbon: total subscribers, active subscribers, average data MB, and
+  average voice minutes per subscriber.
+- Plan-level data consumption and subscriber distribution by city.
+- Weekday-versus-weekend service behavior.
+- Top subscriber activity and exportable customer-level usage detail.
+
+Local URL: `http://localhost:3000/dashboard/5#refresh=600`
+
+## Qlik-style capability mapping
+
+| Qlik-style capability | Implementation in this project |
+|---|---|
+| Sheet selections | Dashboard parameters mapped to every compatible native-SQL card |
+| Selection propagation | Date/category selections rerun all mapped KPIs, charts, maps, and tables |
+| KPI objects | Ten scalar KPI cards across the two dashboards |
+| Trend and comparison charts | Line, bar, and pie visualizations with a shared Orange palette |
+| Geographic analysis | Tower pin map using warehouse latitude/longitude and traffic intensity |
+| Detail/drill workflow | Tower and subscriber detail tables plus Metabase question navigation |
+| Export | Metabase CSV/XLSX/JSON export on saved questions and detail tables |
+| Bookmarked views | Filter values can be preserved in dashboard URLs/bookmarks |
+| Wallboard mode | `#refresh=600` enables ten-minute refresh; Metabase also supports fullscreen |
+| Alerts/subscriptions | Available through Metabase after an administrator configures email or Slack |
+| Access control | Available through Metabase collections, groups, and database permissions |
+
+Metabase is not Qlik Sense: it does not provide Qlik's proprietary associative
+engine, selection-state model, QVD layer, or Qlik scripting language. The
+project implements the closest practical equivalents supported by the selected
+Metabase architecture. Application-wide logo replacement and full white-label
+branding require a Metabase commercial plan; this repository applies branding
+to dashboard names, descriptions, layout, and visualization colors.
 
 ## Provision
 
@@ -13,32 +63,22 @@ run:
 python dashboards/provision_metabase.py
 ```
 
-The provisioner is idempotent: reruns update the same questions and dashboards.
-Each saved question and dashboard uses a 600-second result-cache policy.
+The provisioner is idempotent. It discovers current Metabase field IDs,
+creates or updates saved questions, upgrades the original dashboard IDs in
+place, installs shared filters, and reapplies the deterministic 24-column
+layout. Reprovisioning does not create duplicate cards.
 
-For a wallboard that refreshes every 10 minutes, append `#refresh=600` to its
-dashboard URL. Metabase supports refresh intervals through the dashboard URL,
-for example `http://localhost:3000/dashboard/4#refresh=600`.
+The dashboards use a 600-second result-cache policy. Successful Airflow loads
+appear automatically without reprovisioning.
 
-## Network Ops
+## Verification
 
-- **Hourly Traffic by Type** (`hourly_traffic_by_type.sql`) — hourly event
-  counts split by voice, SMS, and data.
-- **Top 10 Towers** (`top_10_towers.sql`) — event load plus data MB, voice
-  minutes, and SMS totals for the busiest towers.
-- **Quarantine Rate Trend** (`quarantine_rate_trend.sql`) — hourly malformed
-  row percentage from `dwh.etl_hourly_metrics`, persisted idempotently by the
-  Airflow data-quality task. This operational table is additive and does not
-  alter the frozen star schema.
+Run dashboard contract tests with:
 
-## Subscriber Insights
+```bash
+python -m pytest -q dashboards/tests
+```
 
-- **Average MB per Subscriber by Plan**
-  (`mb_per_subscriber_per_plan.sql`) — average and total data MB for prepaid,
-  postpaid, and business plans, including subscribers with zero data events.
-- **Weekday vs Weekend Usage** (`weekday_vs_weekend_usage.sql`) — event mix,
-  data GB, voice minutes, and SMS totals by day type.
-
-All timestamps and hourly groupings are UTC. The dashboards query the fact and
-dimension tables directly; the quarantine card reads the hourly operational
-metrics table. New successful DAG partitions appear without reprovisioning.
+The tests verify unique dashboard/card names, SQL presence, filter-template
+coverage, supported visualizations, valid layouts, the operational quarantine
+source, and the Orange primary color.

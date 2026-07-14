@@ -9,5 +9,7 @@ SELECT
     fact_rows,
     quarantine_rows,
     round(100.0 * quarantine_rate::numeric, 2) AS quarantine_rate_pct
-FROM dwh.etl_hourly_metrics
-ORDER BY run_hour;
+FROM dwh.etl_hourly_metrics AS m
+WHERE 1 = 1
+[[AND {{metric_date}}]]
+ORDER BY m.run_hour;

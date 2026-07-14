@@ -1,75 +1,71 @@
 {
+  "brand": {
+    "name": "Orange Egypt",
+    "primary": "#FF7900",
+    "black": "#000000",
+    "charcoal": "#333333",
+    "gray": "#8F8F8F",
+    "light_gray": "#F4F4F4",
+    "white": "#FFFFFF"
+  },
   "dashboards": [
     {
-      "name": "Network Ops",
-      "description": "Hourly network traffic and tower load. Data updates as Airflow lands each UTC partition.",
+      "name": "Orange Egypt | Network Command Center",
+      "legacy_names": ["Network Ops"],
+      "description": "Orange Egypt branded network command center. Shared selections update every compatible KPI and visualization; all operational timestamps are UTC.",
+      "parameters": [
+        {"id": "p_date_range", "name": "Date", "slug": "date", "type": "date/all-options"},
+        {"id": "p_event_type", "name": "Usage Type", "slug": "usage_type", "type": "category", "values_source_type": "static-list", "values_query_type": "list", "values_source_config": {"values": [["data", "Data"], ["voice", "Voice"], ["sms", "SMS"]]}},
+        {"id": "p_region", "name": "Region", "slug": "region", "type": "category", "values_source_type": "static-list", "values_query_type": "list", "values_source_config": {"values": [["North", "North"], ["South", "South"], ["East", "East"], ["West", "West"], ["Central", "Central"]]}}
+      ],
+      "filter_templates": {
+        "event_date": {"parameter": "p_date_range", "table": "fact_usage_events", "field": "event_ts", "alias": "f.event_ts", "display_name": "Date", "widget_type": "date/all-options"},
+        "event_type": {"parameter": "p_event_type", "table": "fact_usage_events", "field": "event_type", "alias": "f.event_type", "display_name": "Usage Type", "widget_type": "category"},
+        "region": {"parameter": "p_region", "table": "dim_tower", "field": "region", "alias": "t.region", "display_name": "Region", "widget_type": "category"},
+        "metric_date": {"parameter": "p_date_range", "table": "etl_hourly_metrics", "field": "run_hour", "alias": "m.run_hour", "display_name": "Date", "widget_type": "date/all-options"}
+      },
       "cards": [
-        {
-          "name": "Hourly Traffic by Type",
-          "description": "Voice, SMS, and data event counts by UTC hour.",
-          "sql_file": "hourly_traffic_by_type.sql",
-          "display": "line",
-          "visualization_settings": {
-            "graph.dimensions": ["hour_utc", "event_type"],
-            "graph.metrics": ["event_count"],
-            "graph.show_values": true
-          },
-          "layout": {"row": 0, "col": 0, "size_x": 24, "size_y": 8}
-        },
-        {
-          "name": "Top 10 Towers",
-          "description": "Busiest towers ranked by event count, with data, voice, and SMS totals.",
-          "sql_file": "top_10_towers.sql",
-          "display": "bar",
-          "visualization_settings": {
-            "graph.dimensions": ["cell_tower_id"],
-            "graph.metrics": ["event_count"],
-            "graph.show_values": true
-          },
-          "layout": {"row": 8, "col": 0, "size_x": 24, "size_y": 8}
-        },
-        {
-          "name": "Quarantine Rate Trend",
-          "description": "Hourly malformed-row rate persisted by the Airflow data-quality task.",
-          "sql_file": "quarantine_rate_trend.sql",
-          "display": "line",
-          "visualization_settings": {
-            "graph.dimensions": ["hour_utc"],
-            "graph.metrics": ["quarantine_rate_pct"],
-            "graph.show_values": true
-          },
-          "layout": {"row": 16, "col": 0, "size_x": 24, "size_y": 8}
-        }
+        {"name": "Total Usage Events", "description": "Total validated events for the current selections.", "sql_file": "kpi_total_events.sql", "display": "scalar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "total_events"}, "layout": {"row": 0, "col": 0, "size_x": 4, "size_y": 4}},
+        {"name": "Data Traffic (GB)", "description": "Uploaded and downloaded traffic in gigabytes.", "sql_file": "kpi_data_traffic_gb.sql", "display": "scalar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "data_traffic_gb"}, "layout": {"row": 0, "col": 4, "size_x": 4, "size_y": 4}},
+        {"name": "Voice Minutes", "description": "Completed voice duration in minutes.", "sql_file": "kpi_voice_minutes.sql", "display": "scalar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "voice_minutes"}, "layout": {"row": 0, "col": 8, "size_x": 4, "size_y": 4}},
+        {"name": "SMS Messages", "description": "Total SMS messages carried by the network.", "sql_file": "kpi_sms_messages.sql", "display": "scalar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "sms_messages"}, "layout": {"row": 0, "col": 12, "size_x": 4, "size_y": 4}},
+        {"name": "Active Towers", "description": "Distinct towers carrying traffic.", "sql_file": "kpi_active_towers.sql", "display": "scalar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "active_towers"}, "layout": {"row": 0, "col": 16, "size_x": 4, "size_y": 4}},
+        {"name": "Quarantine Rate", "description": "Latest malformed-row rate for the selected window.", "sql_file": "kpi_quarantine_rate.sql", "display": "scalar", "filters": ["metric_date"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "quarantine_rate_pct", "scalar.suffix": "%"}, "layout": {"row": 0, "col": 20, "size_x": 4, "size_y": 4}},
+        {"name": "Hourly Traffic by Type", "description": "Validated event volume by UTC hour and usage type.", "sql_file": "hourly_traffic_by_type.sql", "display": "line", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"graph.dimensions": ["hour_utc", "event_type"], "graph.metrics": ["event_count"], "graph.colors": ["#FF7900", "#000000", "#8F8F8F"], "graph.show_values": false}, "layout": {"row": 4, "col": 0, "size_x": 16, "size_y": 8}},
+        {"name": "Traffic Mix", "description": "Share of data, voice, and SMS events.", "sql_file": "event_mix.sql", "display": "pie", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"pie.dimension": "event_type", "pie.metric": "event_count", "pie.show_legend": true, "series_settings": {"data": {"color": "#FF7900"}, "voice": {"color": "#000000"}, "sms": {"color": "#8F8F8F"}}}, "layout": {"row": 4, "col": 16, "size_x": 8, "size_y": 8}},
+        {"name": "Regional Network Performance", "description": "Events, data, voice, and SMS totals by operating region.", "sql_file": "regional_performance.sql", "display": "bar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"graph.dimensions": ["region"], "graph.metrics": ["event_count"], "graph.colors": ["#FF7900"], "graph.show_values": true}, "layout": {"row": 12, "col": 0, "size_x": 9, "size_y": 8}},
+        {"name": "Tower Coverage Map", "description": "Geographic tower traffic intensity across Egypt.", "sql_file": "tower_coverage_map.sql", "display": "map", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"map.type": "pin", "map.latitude_column": "latitude", "map.longitude_column": "longitude", "map.metric_column": "event_count", "map.pin_type": "tiles", "map.colors": ["#FFD200", "#FF7900", "#CD3C14"]}, "layout": {"row": 12, "col": 9, "size_x": 15, "size_y": 8}},
+        {"name": "Top 10 Towers", "description": "Highest-traffic towers with operational volume breakdown.", "sql_file": "top_10_towers.sql", "display": "bar", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"graph.dimensions": ["cell_tower_id"], "graph.metrics": ["event_count"], "graph.colors": ["#FF7900"], "graph.show_values": true}, "layout": {"row": 20, "col": 0, "size_x": 12, "size_y": 8}},
+        {"name": "Quarantine Rate Trend", "description": "Hourly malformed-row percentage written by Airflow DQ checks.", "sql_file": "quarantine_rate_trend.sql", "display": "line", "filters": ["metric_date"], "visualization_settings": {"graph.dimensions": ["hour_utc"], "graph.metrics": ["quarantine_rate_pct"], "graph.colors": ["#FF7900"], "graph.show_values": true}, "layout": {"row": 20, "col": 12, "size_x": 12, "size_y": 8}},
+        {"name": "Tower Performance Detail", "description": "Exportable tower-level detail for investigation and drill-through.", "sql_file": "tower_performance_detail.sql", "display": "table", "filters": ["event_date", "event_type", "region"], "visualization_settings": {"table.pivot_column": "region", "table.cell_column": "event_count"}, "layout": {"row": 28, "col": 0, "size_x": 24, "size_y": 10}}
       ]
     },
     {
-      "name": "Subscriber Insights",
-      "description": "Plan-level subscriber consumption and weekday/weekend behavior.",
+      "name": "Orange Egypt | Customer & Usage Insights",
+      "legacy_names": ["Subscriber Insights"],
+      "description": "Orange Egypt customer and usage analytics with shared date, plan, city, and service selections.",
+      "parameters": [
+        {"id": "p_customer_date", "name": "Date", "slug": "date", "type": "date/all-options"},
+        {"id": "p_customer_event", "name": "Usage Type", "slug": "usage_type", "type": "category", "values_source_type": "static-list", "values_query_type": "list", "values_source_config": {"values": [["data", "Data"], ["voice", "Voice"], ["sms", "SMS"]]}},
+        {"id": "p_plan", "name": "Plan", "slug": "plan", "type": "category", "values_source_type": "static-list", "values_query_type": "list", "values_source_config": {"values": [["prepaid", "Prepaid"], ["postpaid", "Postpaid"], ["business", "Business"]]}},
+        {"id": "p_city", "name": "City", "slug": "city", "type": "category", "values_source_type": "static-list", "values_query_type": "list", "values_source_config": {"values": [["Cairo", "Cairo"], ["Alexandria", "Alexandria"], ["Giza", "Giza"], ["Mansoura", "Mansoura"], ["Aswan", "Aswan"]]}}
+      ],
+      "filter_templates": {
+        "event_date": {"parameter": "p_customer_date", "table": "fact_usage_events", "field": "event_ts", "alias": "f.event_ts", "display_name": "Date", "widget_type": "date/all-options"},
+        "event_type": {"parameter": "p_customer_event", "table": "fact_usage_events", "field": "event_type", "alias": "f.event_type", "display_name": "Usage Type", "widget_type": "category"},
+        "plan_type": {"parameter": "p_plan", "table": "dim_subscriber", "field": "plan_type", "alias": "s.plan_type", "display_name": "Plan", "widget_type": "category"},
+        "city": {"parameter": "p_city", "table": "dim_subscriber", "field": "city", "alias": "s.city", "display_name": "City", "widget_type": "category"}
+      },
       "cards": [
-        {
-          "name": "Average MB per Subscriber by Plan",
-          "description": "Average data usage per seeded subscriber, including subscribers with no data events.",
-          "sql_file": "mb_per_subscriber_per_plan.sql",
-          "display": "bar",
-          "visualization_settings": {
-            "graph.dimensions": ["plan_type"],
-            "graph.metrics": ["avg_mb_per_subscriber"],
-            "graph.show_values": true
-          },
-          "layout": {"row": 0, "col": 0, "size_x": 24, "size_y": 8}
-        },
-        {
-          "name": "Weekday vs Weekend Usage",
-          "description": "Event mix by weekday/weekend classification from the date dimension.",
-          "sql_file": "weekday_vs_weekend_usage.sql",
-          "display": "bar",
-          "visualization_settings": {
-            "graph.dimensions": ["day_type", "event_type"],
-            "graph.metrics": ["event_count"],
-            "graph.show_values": true
-          },
-          "layout": {"row": 8, "col": 0, "size_x": 24, "size_y": 8}
-        }
+        {"name": "Total Subscribers", "description": "Subscribers in the selected plan and city segments.", "sql_file": "kpi_total_subscribers.sql", "display": "scalar", "filters": ["plan_type", "city"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "total_subscribers"}, "layout": {"row": 0, "col": 0, "size_x": 6, "size_y": 4}},
+        {"name": "Active Subscribers", "description": "Currently active subscribers in the selected segment.", "sql_file": "kpi_active_subscribers.sql", "display": "scalar", "filters": ["plan_type", "city"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "active_subscribers"}, "layout": {"row": 0, "col": 6, "size_x": 6, "size_y": 4}},
+        {"name": "Average Data MB / Subscriber", "description": "Average selected-period data consumption per subscriber.", "sql_file": "kpi_avg_data_mb_per_subscriber.sql", "display": "scalar", "filters": ["event_date", "plan_type", "city"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "avg_data_mb"}, "layout": {"row": 0, "col": 12, "size_x": 6, "size_y": 4}},
+        {"name": "Average Voice Minutes / Subscriber", "description": "Average selected-period voice use per subscriber.", "sql_file": "kpi_avg_voice_minutes_per_subscriber.sql", "display": "scalar", "filters": ["event_date", "plan_type", "city"], "visualization_settings": {"scalar.color": "#FF7900", "scalar.field": "avg_voice_minutes"}, "layout": {"row": 0, "col": 18, "size_x": 6, "size_y": 4}},
+        {"name": "Average MB per Subscriber by Plan", "description": "Average and total data consumption by customer plan.", "sql_file": "mb_per_subscriber_per_plan.sql", "display": "bar", "filters": ["event_date", "plan_type", "city"], "visualization_settings": {"graph.dimensions": ["plan_type"], "graph.metrics": ["avg_mb_per_subscriber"], "graph.colors": ["#FF7900"], "graph.show_values": true}, "layout": {"row": 4, "col": 0, "size_x": 12, "size_y": 8}},
+        {"name": "Subscribers by City", "description": "Customer base and active rate by city.", "sql_file": "subscribers_by_city.sql", "display": "bar", "filters": ["plan_type", "city"], "visualization_settings": {"graph.dimensions": ["city"], "graph.metrics": ["subscriber_count"], "graph.colors": ["#FF7900"], "graph.show_values": true}, "layout": {"row": 4, "col": 12, "size_x": 12, "size_y": 8}},
+        {"name": "Weekday vs Weekend Usage", "description": "Service mix and traffic across weekday and weekend behavior.", "sql_file": "weekday_vs_weekend_usage.sql", "display": "bar", "filters": ["event_date", "event_type", "plan_type", "city"], "visualization_settings": {"graph.dimensions": ["day_type", "event_type"], "graph.metrics": ["event_count"], "graph.colors": ["#FF7900", "#000000", "#8F8F8F"], "graph.show_values": true}, "layout": {"row": 12, "col": 0, "size_x": 12, "size_y": 8}},
+        {"name": "Top Subscribers by Usage", "description": "Highest-consumption subscribers for retention and care workflows.", "sql_file": "top_subscribers.sql", "display": "bar", "filters": ["event_date", "event_type", "plan_type", "city"], "visualization_settings": {"graph.dimensions": ["subscriber_id"], "graph.metrics": ["usage_score"], "graph.colors": ["#FF7900"], "graph.show_values": true}, "layout": {"row": 12, "col": 12, "size_x": 12, "size_y": 8}},
+        {"name": "Subscriber Usage Detail", "description": "Exportable subscriber-level detail for drill-through and customer care.", "sql_file": "subscriber_usage_detail.sql", "display": "table", "filters": ["event_date", "event_type", "plan_type", "city"], "visualization_settings": {}, "layout": {"row": 20, "col": 0, "size_x": 24, "size_y": 10}}
       ]
     }
   ]

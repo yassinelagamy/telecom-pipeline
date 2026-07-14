@@ -9,6 +9,10 @@ WITH subscriber_data AS (
     LEFT JOIN dwh.fact_usage_events AS f
         ON f.subscriber_key = s.subscriber_key
        AND f.event_type = 'data'
+    WHERE 1 = 1
+    [[AND {{event_date}}]]
+    [[AND {{plan_type}}]]
+    [[AND {{city}}]]
     GROUP BY s.subscriber_key, s.plan_type
 )
 SELECT

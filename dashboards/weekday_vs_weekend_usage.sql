@@ -9,5 +9,11 @@ SELECT
     sum(coalesce(f.sms_count, 0)) AS sms_messages
 FROM dwh.fact_usage_events AS f
 JOIN dwh.dim_date AS d ON d.date_key = f.date_key
+JOIN dwh.dim_subscriber AS s ON s.subscriber_key = f.subscriber_key
+WHERE 1 = 1
+[[AND {{event_date}}]]
+[[AND {{event_type}}]]
+[[AND {{plan_type}}]]
+[[AND {{city}}]]
 GROUP BY d.is_weekend, f.event_type
 ORDER BY d.is_weekend, f.event_type;
