@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <title>Orange Egypt | Telecom Intelligence</title>
+  <meta name="description" content="Orange Egypt network and customer analytics command center.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="utility-bar">
+      <div class="nav-width utility-content">
+        <div class="utility-links">
+          <button class="utility-link active">Operations</button>
+          <button class="utility-link">Commercial</button>
+        </div>
+        <div class="utility-actions">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span id="pipelineStatus">Pipeline live</span>
+          <a href="http://localhost:8080" target="_blank" rel="noreferrer">Airflow</a>
+          <a href="http://localhost:3000" target="_blank" rel="noreferrer">Metabase</a>
+          <button id="languageButton" class="utility-link language">عربي&nbsp;&nbsp;<b>EN</b></button>
+          <button class="profile-button" aria-label="Open user profile"><span>OE</span></button>
+        </div>
+      </div>
+    </div>
+    <div class="main-nav">
+      <div class="nav-width main-nav-content">
+        <a class="brand" href="#overview" aria-label="Orange Egypt analytics home">
+          <span>orange<sup>™</sup></span>
+        </a>
+        <nav aria-label="Primary navigation">
+          <button class="nav-link active" data-view="overview">Overview</button>
+          <button class="nav-link" data-view="network">Network</button>
+          <button class="nav-link" data-view="customers">Customers</button>
+          <button class="nav-link" data-view="quality">Data Quality</button>
+        </nav>
+        <div class="nav-actions">
+          <button id="refreshButton" class="nav-action">Refresh</button>
+          <button id="fullscreenButton" class="nav-action strong">Full screen</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="filter-shell" aria-label="Dashboard selections">
+      <div class="page-width selection-heading">
+        <div>
+          <p class="eyebrow">Telecom intelligence</p>
+          <h1>Orange Egypt Command Center</h1>
+        </div>
+        <div class="selection-actions">
+          <span id="updatedAt">Waiting for live data</span>
+          <button id="resetButton" class="text-button">Clear selections</button>
+        </div>
+      </div>
+
+      <div class="page-width service-rail">
+        <button class="rail-arrow" aria-label="Previous selections">‹</button>
+        <label class="service-control">
+          <span class="control-icon calendar-icon">31</span>
+          <span class="control-copy"><b>From date</b><input id="dateFrom" type="date"></span>
+        </label>
+        <label class="service-control">
+          <span class="control-icon calendar-icon">31</span>
+          <span class="control-copy"><b>To date</b><input id="dateTo" type="date"></span>
+        </label>
+        <label class="service-control">
+          <span class="control-icon signal-icon">▥</span>
+          <span class="control-copy"><b>Usage type</b><select id="eventType"><option value="">All services</option><option value="data">Data</option><option value="voice">Voice</option><option value="sms">SMS</option></select></span>
+        </label>
+        <label class="service-control network-filter">
+          <span class="control-icon location-icon">●</span>
+          <span class="control-copy"><b>Region</b><select id="region"><option value="">All regions</option><option>North</option><option>South</option><option>East</option><option>West</option><option>Central</option></select></span>
+        </label>
+        <label class="service-control customer-filter">
+          <span class="control-icon plan-icon">P</span>
+          <span class="control-copy"><b>Customer plan</b><select id="plan"><option value="">All plans</option><option value="prepaid">Prepaid</option><option value="postpaid">Postpaid</option><option value="business">Business</option></select></span>
+        </label>
+        <label class="service-control customer-filter">
+          <span class="control-icon city-icon">⌂</span>
+          <span class="control-copy"><b>City</b><select id="city"><option value="">All cities</option><option>Cairo</option><option>Alexandria</option><option>Giza</option><option>Mansoura</option><option>Aswan</option></select></span>
+        </label>
+        <button class="rail-arrow" aria-label="Next selections">›</button>
+      </div>
+      <div id="selectionChips" class="page-width selection-chips" aria-live="polite"></div>
+    </section>
+
+    <div id="errorBanner" class="page-width error-banner" role="alert" hidden></div>
+
+    <section id="overviewSection" class="page-width dashboard-section overview-section" data-section="overview">
+      <div class="feature-grid">
+        <article class="feature-card network-pulse">
+          <div class="feature-copy">
+            <span class="feature-tag">Live network</span>
+            <h2>Performance at a glance</h2>
+            <p>Traffic, reach, service mix and quality—all responding to the current selection state.</p>
+            <button class="orange-button" data-view-jump="network">Explore network</button>
+          </div>
+          <div class="pulse-visual" aria-hidden="true">
+            <span class="pulse-ring ring-one"></span><span class="pulse-ring ring-two"></span>
+            <span class="pulse-value" id="heroEvents">—</span><small>validated events</small>
+          </div>
+          <div class="feature-dots" aria-hidden="true"><i></i><i class="active"></i><i></i><i></i></div>
+        </article>
+        <div class="feature-stack">
+          <article class="promo-card orange-panel">
+            <p>Data quality</p><strong id="heroQuality">—</strong><span>quarantine rate</span>
+            <button data-view-jump="quality">View controls →</button>
+          </article>
+          <article class="promo-card dark-panel">
+            <p>Customer reach</p><strong id="heroSubscribers">—</strong><span>active subscribers</span>
+            <button data-view-jump="customers">View segments →</button>
+          </article>
+        </div>
+      </div>
+
+      <div class="section-title"><div><span>Executive pulse</span><h2>Today’s operating picture</h2></div><button class="outline-button export-overview">Export summary</button></div>
+      <div id="overviewKpis" class="kpi-grid six"></div>
+    </section>
+
+    <section id="networkSection" class="page-width dashboard-section" data-section="network">
+      <div class="section-title"><div><span>Network operations</span><h2>Traffic and coverage</h2></div><button class="outline-button" data-export="towers">Export towers</button></div>
+      <div id="networkKpis" class="kpi-grid six"></div>
+      <div class="analytics-grid">
+        <article class="analytics-card wide"><div class="card-heading"><div><span>UTC hourly trend</span><h3>Traffic by service</h3></div><div class="legend"><i class="orange"></i>Data <i class="black"></i>Voice <i class="gray"></i>SMS</div></div><canvas id="trafficChart" height="280" aria-label="Hourly traffic line chart"></canvas></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Share of events</span><h3>Service mix</h3></div></div><canvas id="mixChart" height="280" aria-label="Service mix doughnut chart"></canvas><div id="mixLegend" class="mix-legend"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Operating areas</span><h3>Regional performance</h3></div></div><div id="regionBars" class="bar-list"></div></article>
+        <article class="analytics-card wide"><div class="card-heading"><div><span>Coverage intensity</span><h3>Tower activity map</h3></div><span class="map-key">Low&nbsp;&nbsp;→&nbsp;&nbsp;High</span></div><canvas id="towerMap" height="360" aria-label="Tower activity map"></canvas></article>
+      </div>
+      <article class="analytics-card table-card"><div class="card-heading"><div><span>Investigation table</span><h3>Top towers</h3></div><button class="small-button" data-export="towers">Download CSV</button></div><div class="table-wrap"><table><thead><tr><th>Tower</th><th>Region</th><th>Events</th><th>Subscribers</th><th>Data MB</th><th>Voice min</th><th>SMS</th></tr></thead><tbody id="towerTable"></tbody></table></div></article>
+    </section>
+
+    <section id="customerSection" class="page-width dashboard-section" data-section="customers">
+      <div class="section-title"><div><span>Customer intelligence</span><h2>Segments and usage</h2></div><button class="outline-button" data-export="customers">Export subscribers</button></div>
+      <div id="customerKpis" class="kpi-grid four"></div>
+      <div class="analytics-grid two-column">
+        <article class="analytics-card"><div class="card-heading"><div><span>Commercial mix</span><h3>Usage by plan</h3></div></div><div id="planBars" class="bar-list"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Geographic base</span><h3>Subscribers by city</h3></div></div><div id="cityBars" class="bar-list"></div></article>
+        <article class="analytics-card wide"><div class="card-heading"><div><span>Behavior pattern</span><h3>Weekday vs weekend</h3></div></div><canvas id="weekdayChart" height="260" aria-label="Weekday versus weekend usage chart"></canvas></article>
+      </div>
+      <article class="analytics-card table-card"><div class="card-heading"><div><span>Customer care workflow</span><h3>Top subscriber activity</h3></div><button class="small-button" data-export="customers">Download CSV</button></div><div class="table-wrap"><table><thead><tr><th>Subscriber</th><th>Plan</th><th>City</th><th>Events</th><th>Data MB</th><th>Voice min</th><th>SMS</th><th>Last activity</th></tr></thead><tbody id="customerTable"></tbody></table></div></article>
+    </section>
+
+    <section id="qualitySection" class="page-width dashboard-section" data-section="quality">
+      <div class="section-title"><div><span>Data reliability</span><h2>Pipeline quality controls</h2></div><a class="outline-button link-button" href="http://localhost:8080/dags/hourly_usage_etl/grid" target="_blank" rel="noreferrer">Open Airflow</a></div>
+      <div id="qualityKpis" class="kpi-grid four"></div>
+      <article class="analytics-card"><div class="card-heading"><div><span>Hourly DQ signal</span><h3>Quarantine rate trend</h3></div><span class="quality-threshold">Target &lt; 5%</span></div><canvas id="qualityChart" height="300" aria-label="Quarantine rate line chart"></canvas></article>
+    </section>
+  </main>
+
+  <button id="helpButton" class="help-tab">Help &amp; support</button>
+  <footer><div class="page-width"><span class="footer-brand">orange<sup>™</sup></span><p>Orange Egypt Telecom Intelligence · UTC operational reporting</p><span id="footerState">Live warehouse</span></div></footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>

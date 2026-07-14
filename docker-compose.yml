@@ -235,3 +235,21 @@ services:
       postgres-dwh:
         condition: service_healthy
     restart: "no"
+
+  orange-frontend:
+    build: ./frontend
+    ports:
+      - "${ORANGE_FRONTEND_PORT:-8088}:8088"
+    environment:
+      FRONTEND_PORT: 8088
+      DWH_POSTGRES_HOST: postgres-dwh
+      DWH_POSTGRES_PORT: 5432
+      DWH_POSTGRES_DB: ${DWH_POSTGRES_DB}
+      DWH_POSTGRES_USER: ${DWH_POSTGRES_USER}
+      DWH_POSTGRES_PASSWORD: ${DWH_POSTGRES_PASSWORD}
+      TZ: UTC
+    networks: [telecom-net]
+    depends_on:
+      postgres-dwh:
+        condition: service_healthy
+    restart: unless-stopped

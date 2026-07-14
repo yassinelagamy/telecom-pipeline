@@ -1,6 +1,6 @@
 # Telecom Usage Data Pipeline
 
-End-to-end batch data pipeline simulating a real-world telecom analytics platform: **log generation → data lake (MinIO) → hourly PySpark ETL (Airflow-orchestrated) → star-schema Postgres warehouse → live Metabase dashboards**.
+End-to-end batch data pipeline simulating a real-world telecom analytics platform: **log generation → data lake (MinIO) → hourly PySpark ETL (Airflow-orchestrated) → star-schema Postgres warehouse → Orange Egypt analytics frontend + Metabase**.
 
 ```
 Log Generator ──> MinIO (raw)  ──> PySpark ETL ──> Postgres DWH ──> Metabase
@@ -16,7 +16,7 @@ Log Generator ──> MinIO (raw)  ──> PySpark ETL ──> Postgres DWH ─�
 | **Orchestration** | Airflow 2.9.3 | Hourly DAG managing ETL runs + quality gates |
 | **Transform** | PySpark 3.5.1 | Validates raw logs → quarantines malformed → joins dims → loads facts |
 | **Warehouse** | Postgres 16 | 3-dim star schema + operational metrics table |
-| **Analytics** | Metabase 0.62.4 | Live dashboards with 10-min refresh |
+| **Analytics** | Orange frontend + Metabase 0.62.4 | Branded operations interface plus analyst authoring |
 
 ## Quick start
 
@@ -34,6 +34,7 @@ Services come up on:
 |---------|-----|-------------|
 | **MinIO console** | http://localhost:9001 | admin / (from `.env`) |
 | **Airflow** | http://localhost:8080 | admin / (from `.env`) |
+| **Orange analytics** | http://localhost:8088 | Custom live operations interface |
 | **Metabase** | http://localhost:3000 | auto-initialized |
 | **Postgres** | localhost:5432 | dwh_user / (from `.env`) |
 
