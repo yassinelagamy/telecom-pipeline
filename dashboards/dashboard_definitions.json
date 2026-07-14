@@ -1,0 +1,64 @@
+{
+  "dashboards": [
+    {
+      "name": "Network Ops",
+      "description": "Hourly network traffic and tower load. Data updates as Airflow lands each UTC partition.",
+      "cards": [
+        {
+          "name": "Hourly Traffic by Type",
+          "description": "Voice, SMS, and data event counts by UTC hour.",
+          "sql_file": "hourly_traffic_by_type.sql",
+          "display": "line",
+          "visualization_settings": {
+            "graph.dimensions": ["hour_utc", "event_type"],
+            "graph.metrics": ["event_count"],
+            "graph.show_values": true
+          },
+          "layout": {"row": 0, "col": 0, "size_x": 24, "size_y": 8}
+        },
+        {
+          "name": "Top 10 Towers",
+          "description": "Busiest towers ranked by event count, with data, voice, and SMS totals.",
+          "sql_file": "top_10_towers.sql",
+          "display": "bar",
+          "visualization_settings": {
+            "graph.dimensions": ["cell_tower_id"],
+            "graph.metrics": ["event_count"],
+            "graph.show_values": true
+          },
+          "layout": {"row": 8, "col": 0, "size_x": 24, "size_y": 8}
+        }
+      ]
+    },
+    {
+      "name": "Subscriber Insights",
+      "description": "Plan-level subscriber consumption and weekday/weekend behavior.",
+      "cards": [
+        {
+          "name": "Average MB per Subscriber by Plan",
+          "description": "Average data usage per seeded subscriber, including subscribers with no data events.",
+          "sql_file": "mb_per_subscriber_per_plan.sql",
+          "display": "bar",
+          "visualization_settings": {
+            "graph.dimensions": ["plan_type"],
+            "graph.metrics": ["avg_mb_per_subscriber"],
+            "graph.show_values": true
+          },
+          "layout": {"row": 0, "col": 0, "size_x": 24, "size_y": 8}
+        },
+        {
+          "name": "Weekday vs Weekend Usage",
+          "description": "Event mix by weekday/weekend classification from the date dimension.",
+          "sql_file": "weekday_vs_weekend_usage.sql",
+          "display": "bar",
+          "visualization_settings": {
+            "graph.dimensions": ["day_type", "event_type"],
+            "graph.metrics": ["event_count"],
+            "graph.show_values": true
+          },
+          "layout": {"row": 8, "col": 0, "size_x": 24, "size_y": 8}
+        }
+      ]
+    }
+  ]
+}
