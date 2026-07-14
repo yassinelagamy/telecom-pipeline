@@ -1,0 +1,27 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# airflow runtime
+airflow/logs/
+airflow/plugins/__pycache__/
+
+# spark
+etl/jars/
+spark-warehouse/
+*.crc
+
+# local data / scratch
+data/
+*.json.gz
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

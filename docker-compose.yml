@@ -1,0 +1,42 @@
+# Telecom Usage Data Pipeline — docker-compose
+#
+# Phase 0: skeleton (shared network + volumes + service stubs).
+# Phase 1: Dev A fills in minio + airflow; Dev B fills in postgres-dwh + metabase.
+#
+# Usage: cp .env.example .env  →  docker compose up -d
+
+name: telecom-pipeline
+
+networks:
+  telecom-net:
+    driver: bridge
+
+volumes:
+  minio-data:
+  dwh-data:
+  airflow-db-data:
+  metabase-data:
+
+services:
+
+  # ────────────────────────────────────────────────────────────────
+  # Dev A — data lake & orchestration
+  # ────────────────────────────────────────────────────────────────
+
+  # minio:        (added in Phase 1 by Dev A)
+  # airflow:      (added in Phase 1 by Dev A)
+
+  # ────────────────────────────────────────────────────────────────
+  # Dev B — warehouse & analytics
+  # ────────────────────────────────────────────────────────────────
+
+  # postgres-dwh: (added in Phase 1 by Dev B)
+  #   image: postgres:16
+  #   ports: ["5432:5432"]
+  #   env: DWH_POSTGRES_* from .env, db telecom_dwh, schema dwh
+  #   init: mount dwh/ddl.sql via /docker-entrypoint-initdb.d
+
+  # metabase:     (added in Phase 1 by Dev B)
+  #   image: metabase/metabase:latest
+  #   ports: ["3000:3000"]
+  #   volume: metabase-data:/metabase-data
