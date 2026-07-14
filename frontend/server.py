@@ -84,6 +84,31 @@ def enum_value(params, name: str, allowed: set[str]) -> str | None:
     return value
 
 
+def enum_values(params, name: str, allowed: set[str]) -> list[str]:
+    """Multi-select variant: repeated params and/or comma-separated values."""
+    raw = params.get(name, [])
+    values: list[str] = []
+    for entry in raw:
+        for value in entry.split(","):
+            value = value.strip()
+            if not value:
+                continue
+            if value not in allowed:
+                raise ValueError(f"Invalid {name}")
+            if value not in values:
+                values.append(value)
+    return values
+
+
+def in_clause(clauses: list, values: list, column: str, selected: list[str]):
+    if len(selected) == 1:
+        clauses.append(f"{column} = %s")
+        values.append(selected[0])
+    elif selected:
+        clauses.append(f"{column} IN ({', '.join(['%s'] * len(selected))})")
+        values.extend(selected)
+
+
 def date_value(params, name: str) -> str | None:
     value = clean_value(params, name)
     if value:
@@ -91,48 +116,51 @@ def date_value(params, name: str) -> str | None:
     return value
 
 
-def usage_filters(params: dict[str, list[str]], include_customer=True):
+def usage_filters(params: dict[str, list[str]], include_customer=True,
+                  skip: str | None = None):
+    """WHERE clause for the current selection state.
+
+    `skip` omits one dimension's own selection — the associative panel
+    (/api/filters) needs sibling values within a field to stay selectable.
+    """
     clauses = ["1 = 1"]
     values: list[str] = []
     start = date_value(params, "date_from")
     end = date_value(params, "date_to")
-    event_type = enum_value(params, "event_type", EVENT_TYPES)
-    region = enum_value(params, "region", REGIONS)
-    plan = enum_value(params, "plan", PLANS)
-    city = enum_value(params, "city", CITIES)
+    event_type = enum_values(params, "event_type", EVENT_TYPES)
+    region = enum_values(params, "region", REGIONS)
+    plan = enum_values(params, "plan", PLANS)
+    city = enum_values(params, "city", CITIES)
     if start:
         clauses.append("f.event_ts >= %s::date")
         values.append(start)
     if end:
         clauses.append("f.event_ts < %s::date + interval '1 day'")
         values.append(end)
-    if event_type:
-        clauses.append("f.event_type = %s")
-        values.append(event_type)
-    if region:
-        clauses.append("t.region = %s")
-        values.append(region)
-    if include_customer and plan:
-        clauses.append("s.plan_type = %s")
-        values.append(plan)
-    if include_customer and city:
-        clauses.append("s.city = %s")
-        values.append(city)
+    if skip != "event_type":
+        in_clause(clauses, values, "f.event_type", event_type)
+    if skip != "region":
+        in_clause(clauses, values, "t.region", region)
+    if include_customer and skip != "plan":
+        in_clause(clauses, values, "s.plan_type", plan)
+    if include_customer and skip != "city":
+        in_clause(clauses, values, "s.city", city)
     return " AND ".join(clauses), values
 
 
 def subscriber_filters(params: dict[str, list[str]]):
     clauses = ["1 = 1"]
     values: list[str] = []
-    plan = enum_value(params, "plan", PLANS)
-    city = enum_value(params, "city", CITIES)
-    if plan:
-        clauses.append("s.plan_type = %s")
-        values.append(plan)
-    if city:
-        clauses.append("s.city = %s")
-        values.append(city)
+    in_clause(clauses, values, "s.plan_type", enum_values(params, "plan", PLANS))
+    in_clause(clauses, values, "s.city", enum_values(params, "city", CITIES))
     return " AND ".join(clauses), values
+
+
+def granularity_value(params) -> str:
+    value = clean_value(params, "granularity") or "hour"
+    if value not in {"hour", "day"}:
+        raise ValueError("Invalid granularity")
+    return value
 
 
 def metric_filters(params: dict[str, list[str]]):
@@ -189,11 +217,25 @@ def network_payload(params: dict[str, list[str]]):
             """,
             metric_values,
         )
+        grain = granularity_value(params)
         hourly = many(
             cursor,
             f"""
-            SELECT date_trunc('hour', f.event_ts) AS hour_utc,
+            SELECT date_trunc('{grain}', f.event_ts) AS hour_utc,
                    f.event_type, count(*) AS event_count
+            {joins}
+            WHERE {where}
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+            """,
+            values,
+        )
+        heatmap = many(
+            cursor,
+            f"""
+            SELECT extract(isodow FROM f.event_ts)::int AS day_of_week,
+                   extract(hour FROM f.event_ts)::int AS hour_of_day,
+                   count(*) AS event_count
             {joins}
             WHERE {where}
             GROUP BY 1, 2
@@ -257,13 +299,64 @@ def network_payload(params: dict[str, list[str]]):
         )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "granularity": grain,
         "kpis": {**kpis, **latest_quality},
         "hourly": hourly,
+        "heatmap": heatmap,
         "regions": regions,
         "service_mix": service_mix,
         "towers": towers,
         "top_towers": towers[:10],
         "quarantine": quarantine,
+    }
+
+
+FILTER_FIELDS = {
+    "event_type": ("f.event_type", EVENT_TYPES),
+    "region": ("t.region", REGIONS),
+    "plan": ("s.plan_type", PLANS),
+    "city": ("s.city", CITIES),
+}
+
+
+def filters_payload(params: dict[str, list[str]]):
+    """Associative model: per field, every value with its event count under the
+    rest of the selection (the field's own selection excluded, so sibling
+    values stay selectable — Qlik's white/green/grey states)."""
+    joins = """
+        FROM dwh.fact_usage_events AS f
+        JOIN dwh.dim_tower AS t ON t.tower_key = f.tower_key
+        JOIN dwh.dim_subscriber AS s ON s.subscriber_key = f.subscriber_key
+    """
+    fields = {}
+    with connect() as connection, connection.cursor() as cursor:
+        for name, (column, allowed) in FILTER_FIELDS.items():
+            where, values = usage_filters(params, skip=name)
+            rows = many(
+                cursor,
+                f"""
+                SELECT {column} AS value, count(*) AS event_count
+                {joins}
+                WHERE {where}
+                GROUP BY 1
+                ORDER BY event_count DESC
+                """,
+                values,
+            )
+            counts = {row["value"]: row["event_count"] for row in rows}
+            selected = enum_values(params, name, allowed)
+            fields[name] = [
+                {
+                    "value": value,
+                    "event_count": counts.get(value, 0),
+                    "selected": value in selected,
+                    "possible": counts.get(value, 0) > 0,
+                }
+                for value in sorted(allowed)
+            ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "fields": fields,
     }
 
 
@@ -392,6 +485,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/customers":
                 self.json_response(customer_payload(parse_qs(parsed.query)))
+                return
+            if parsed.path == "/api/filters":
+                self.json_response(filters_payload(parse_qs(parsed.query)))
                 return
         except (ValueError, KeyError) as error:
             self.json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
