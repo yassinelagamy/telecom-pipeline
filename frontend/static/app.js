@@ -273,6 +273,12 @@ function renderSelectionChips() {
 function setView(view, scroll = true) {
   state.view = view;
   $$(".nav-link").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+  const workspace = view === "customers" ? "commercial" : "operations";
+  $$('[data-workspace]').forEach((button) => {
+    const active = button.dataset.workspace === workspace;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   $$(".dashboard-section").forEach((section) => section.classList.toggle("is-hidden", section.dataset.section !== view));
   $$(".network-filter").forEach((element) => element.classList.toggle("hidden-control", view === "customers"));
   $$(".customer-filter").forEach((element) => element.classList.toggle("hidden-control", view === "network" || view === "quality"));
@@ -296,6 +302,9 @@ function exportSummary() {
 
 function bindEvents() {
   $$(".nav-link").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
+  $$('[data-workspace]').forEach((button) => button.addEventListener("click", () => {
+    setView(button.dataset.workspace === "commercial" ? "customers" : "network");
+  }));
   $$('[data-view-jump]').forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewJump)));
   filterIds.forEach((id) => $(`#${id}`).addEventListener("change", () => { renderSelectionChips(); loadData(); }));
   $("#selectionChips").addEventListener("click", (event) => {

@@ -36,6 +36,10 @@ def test_frontend_contains_reference_driven_orange_controls():
     assert "utility-bar" in html
     assert "service-rail" in html
     assert "orange<sup>™</sup>" in html
+    assert 'data-workspace="commercial"' in html
+    assert 'button.dataset.workspace === "commercial" ? "customers" : "network"' in (
+        ROOT / "frontend" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
     assert "--orange: #ff7900" in css
     assert "border-radius: 0" in css
 
