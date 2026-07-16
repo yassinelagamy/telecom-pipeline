@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#000000">
   <title>Orange Egypt | Telecom Intelligence</title>
   <meta name="description" content="Orange Egypt network and customer analytics command center.">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=2.0">
 </head>
 <body>
   <header class="site-header">
@@ -35,6 +35,7 @@
           <button class="nav-link active" data-view="overview">Overview</button>
           <button class="nav-link" data-view="network">Network</button>
           <button class="nav-link" data-view="customers">Customers</button>
+          <button class="nav-link" data-view="cross">Cross Analysis</button>
           <button class="nav-link" data-view="quality">Data Quality</button>
         </nav>
         <div class="global-search">
@@ -60,7 +61,10 @@
         <div class="selection-actions">
           <span id="updatedAt">Waiting for live data</span>
           <button id="bookmarkButton" class="text-button">☆ Bookmarks</button>
+          <button id="alertButton" class="text-button">⚑ Alerts</button>
           <button id="compareButton" class="text-button">⇄ Compare</button>
+          <button id="shareButton" class="text-button">↗ Share</button>
+          <button id="printButton" class="text-button">Print / PDF</button>
           <button id="resetButton" class="text-button">Clear selections</button>
         </div>
       </div>
@@ -91,10 +95,19 @@
           <span class="control-icon city-icon">⌂</span>
           <span class="control-copy"><b>City</b><span class="field-summary" data-summary="city">All cities</span></span>
         </button>
+        <button class="service-control field-tile" data-field="tower">
+          <span class="control-icon tower-icon">T</span>
+          <span class="control-copy"><b>Tower</b><span class="field-summary" data-summary="tower">All towers</span></span>
+        </button>
+        <button class="service-control field-tile" data-field="subscriber">
+          <span class="control-icon subscriber-icon">S</span>
+          <span class="control-copy"><b>Subscriber</b><span class="field-summary" data-summary="subscriber">All subscribers</span></span>
+        </button>
         <button id="historyForward" class="rail-arrow" aria-label="Next selections" disabled>›</button>
       </div>
       <div id="fieldPopover" class="field-popover" hidden></div>
       <div id="bookmarkPanel" class="bookmark-panel" hidden></div>
+      <div id="alertPanel" class="alert-panel" hidden></div>
       <div id="selectionChips" class="page-width selection-chips" aria-live="polite"></div>
       <div id="compareStrip" class="page-width compare-strip" hidden></div>
     </section>
@@ -147,10 +160,12 @@
               <div class="legend legend-clickable" id="trafficLegend"><i class="orange"></i><button data-select-type="data">Data</button> <i class="black"></i><button data-select-type="voice">Voice</button> <i class="gray"></i><button data-select-type="sms">SMS</button></div>
             </div>
           </div>
-          <canvas id="trafficChart" height="280" aria-label="Traffic trend line chart"></canvas>
+          <div id="trafficChart" class="e-chart" style="height:340px" role="img" aria-label="Traffic trend line chart with zoom controls"></div>
         </article>
-        <article class="analytics-card"><div class="card-heading"><div><span>Share of events · click to select</span><h3>Service mix</h3></div></div><canvas id="mixChart" height="280" aria-label="Service mix doughnut chart"></canvas><div id="mixLegend" class="mix-legend"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Share of events · click to select</span><h3>Service mix</h3></div></div><div id="mixChart" class="e-chart" style="height:300px" role="img" aria-label="Interactive service mix doughnut chart"></div><div id="mixLegend" class="mix-legend"></div></article>
         <article class="analytics-card"><div class="card-heading"><div><span>Operating areas · click to select</span><h3>Regional performance</h3></div></div><div id="regionBars" class="bar-list"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Highest event volume · click to filter</span><h3>Top 10 towers</h3></div></div><div id="topTowerChart" class="e-chart" style="height:360px" role="img" aria-label="Interactive top ten towers by event volume"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Capacity by operating area · click to filter</span><h3>Regional data traffic</h3></div></div><div id="regionDataChart" class="e-chart" style="height:360px" role="img" aria-label="Interactive data traffic by region"></div></article>
         <article class="analytics-card wide"><div class="card-heading"><div><span>Behavioral rhythm</span><h3>Traffic heatmap — weekday × hour</h3></div><span class="map-key">Low&nbsp;&nbsp;→&nbsp;&nbsp;High</span></div><div id="heatmap" class="heatmap" role="img" aria-label="Traffic heatmap by weekday and hour"></div></article>
         <article class="analytics-card wide"><div class="card-heading"><div><span>Coverage intensity</span><h3>Tower activity map</h3></div><span class="map-key">Low&nbsp;&nbsp;→&nbsp;&nbsp;High</span></div><canvas id="towerMap" height="360" aria-label="Tower activity map"></canvas></article>
       </div>
@@ -169,7 +184,10 @@
       <div class="analytics-grid two-column">
         <article class="analytics-card"><div class="card-heading"><div><span>Commercial mix · click to select</span><h3>Usage by plan</h3></div></div><div id="planBars" class="bar-list"></div></article>
         <article class="analytics-card"><div class="card-heading"><div><span>Geographic base · click to select</span><h3>Subscribers by city</h3></div></div><div id="cityBars" class="bar-list"></div></article>
-        <article class="analytics-card wide"><div class="card-heading"><div><span>Behavior pattern</span><h3>Weekday vs weekend</h3></div></div><canvas id="weekdayChart" height="260" aria-label="Weekday versus weekend usage chart"></canvas></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Metabase parity · click plan to select</span><h3>Average data by plan</h3></div></div><div id="planDataChart" class="e-chart" style="height:330px" role="img" aria-label="Interactive average megabytes per subscriber by plan"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Active base health · click city to select</span><h3>Active vs total by city</h3></div></div><div id="cityActivityChart" class="e-chart" style="height:330px" role="img" aria-label="Interactive active and total subscribers by city"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Behavior pattern · click service to select</span><h3>Weekday vs weekend</h3></div></div><div id="weekdayChart" class="e-chart" style="height:330px" role="img" aria-label="Interactive weekday versus weekend usage chart"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Highest activity customers · click to select</span><h3>Top subscribers by usage</h3></div></div><div id="topSubscriberChart" class="e-chart" style="height:360px" role="img" aria-label="Interactive top subscribers by usage events"></div></article>
       </div>
       <article class="analytics-card table-card">
         <div class="card-heading">
@@ -180,15 +198,69 @@
       </article>
     </section>
 
+    <section id="crossSection" class="page-width dashboard-section" data-section="cross">
+      <div class="section-title">
+        <div><span>Flexible exploration</span><h2>Cross data analysis</h2></div>
+        <span class="interaction-note">Hover for values · click a bar to filter every dashboard</span>
+      </div>
+      <div class="cross-controls" aria-label="Cross analysis configuration">
+        <label><span>Analysis mode</span><select id="crossDrillPath">
+          <option value="">Custom dimensions</option><option value="geography">Network geography</option>
+          <option value="customer">Customer segmentation</option><option value="service">Service to network</option>
+        </select></label>
+        <label><span>Group by</span><select id="crossDimension">
+          <option value="region">Region</option><option value="plan">Plan</option>
+          <option value="city">City</option><option value="event_type">Usage type</option>
+          <option value="tower">Tower</option><option value="subscriber">Subscriber</option>
+        </select></label>
+        <label><span>Split by</span><select id="crossSplit">
+          <option value="">No split</option><option value="event_type" selected>Usage type</option>
+          <option value="region">Region</option><option value="plan">Plan</option>
+          <option value="city">City</option><option value="tower">Tower</option>
+        </select></label>
+        <label><span>Measure</span><select id="crossMetric">
+          <option value="events">Usage events</option><option value="data_mb">Data traffic (MB)</option>
+          <option value="voice_minutes">Voice minutes</option><option value="sms_messages">SMS messages</option>
+          <option value="subscribers">Unique subscribers</option>
+        </select></label>
+        <label><span>Show top</span><select id="crossLimit">
+          <option value="5">5</option><option value="10" selected>10</option>
+          <option value="15">15</option><option value="20">20</option>
+        </select></label>
+        <label><span>Chart type</span><select id="crossChartType">
+          <option value="bar">Grouped bars</option><option value="stacked">Stacked bars</option>
+          <option value="line">Line comparison</option><option value="pie">Pie (single dimension)</option>
+        </select></label>
+      </div>
+      <div id="drillBreadcrumb" class="drill-breadcrumb" hidden></div>
+      <article class="analytics-card cross-chart-card">
+        <div class="card-heading">
+          <div><span id="crossSubtitle">Region × Usage type</span><h3 id="crossTitle">Usage events comparison</h3></div>
+          <div id="crossLegend" class="legend cross-legend"></div>
+        </div>
+        <div id="crossChart" class="e-chart" style="height:480px" role="img" aria-label="Configurable cross analysis chart with zoom and export"></div>
+      </article>
+      <article class="analytics-card table-card">
+        <div class="card-heading"><div><span>Underlying crossed result</span><h3>Cross-analysis detail</h3></div><button class="small-button" id="exportCross">Download CSV</button></div>
+        <div class="table-wrap"><table><thead><tr><th id="crossDimensionHead">Dimension</th><th id="crossSeriesHead">Series</th><th id="crossMetricHead">Metric</th><th>Total</th></tr></thead><tbody id="crossTable"></tbody></table></div>
+      </article>
+    </section>
+
     <section id="qualitySection" class="page-width dashboard-section" data-section="quality">
       <div class="section-title"><div><span>Data reliability</span><h2>Pipeline quality controls</h2></div><a class="outline-button link-button" href="http://localhost:8080/dags/hourly_usage_etl/grid" target="_blank" rel="noreferrer">Open Airflow</a></div>
       <div id="qualityKpis" class="kpi-grid four"></div>
-      <article class="analytics-card"><div class="card-heading"><div><span>Hourly DQ signal</span><h3>Quarantine rate trend</h3></div><span class="quality-threshold">Target &lt; 5%</span></div><canvas id="qualityChart" height="300" aria-label="Quarantine rate line chart"></canvas></article>
+      <div class="analytics-grid quality-grid">
+        <article class="analytics-card"><div class="card-heading"><div><span>Hourly DQ signal</span><h3>Quarantine rate trend</h3></div><span class="quality-threshold">Target &lt; 5%</span></div><div id="qualityChart" class="e-chart" style="height:350px" role="img" aria-label="Interactive quarantine rate line chart"></div></article>
+        <article class="analytics-card"><div class="card-heading"><div><span>Pipeline throughput</span><h3>Raw, accepted and quarantined rows</h3></div></div><div id="qualityVolumeChart" class="e-chart" style="height:350px" role="img" aria-label="Interactive raw accepted and quarantined row volume"></div></article>
+      </div>
     </section>
   </main>
 
+  <div id="chartTooltip" class="chart-tooltip" role="status" hidden></div>
+
   <button id="helpButton" class="help-tab">Help &amp; support</button>
   <footer><div class="page-width"><span class="footer-brand">orange<sup>™</sup></span><p>Orange Egypt Telecom Intelligence · UTC operational reporting</p><span id="footerState">Live warehouse</span></div></footer>
-  <script src="/app.js" defer></script>
+  <script src="/vendor/echarts.min.js?v=6.1.0" defer></script>
+  <script src="/app.js?v=2.0" defer></script>
 </body>
 </html>

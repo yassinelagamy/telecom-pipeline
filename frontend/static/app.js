@@ -4,26 +4,33 @@ const GRAY = "#8f8f8f";
 const LIGHT = "#dedede";
 const GREEN = "#009845"; // Qlik-style "selected" green
 
-const FIELDS = ["event_type", "region", "plan", "city"];
-const FIELD_LABELS = { event_type: "Usage", region: "Region", plan: "Plan", city: "City" };
-const FIELD_EMPTY = { event_type: "All services", region: "All regions", plan: "All plans", city: "All cities" };
+const FIELDS = ["event_type", "region", "plan", "city", "tower", "subscriber"];
+const FIELD_LABELS = { event_type: "Usage", region: "Region", plan: "Plan", city: "City", tower: "Tower", subscriber: "Subscriber" };
+const FIELD_EMPTY = { event_type: "All services", region: "All regions", plan: "All plans", city: "All cities", tower: "All towers", subscriber: "All subscribers" };
 const BOOKMARK_KEY = "oeg-bookmarks-v1";
+const ALERT_KEY = "oeg-alerts-v1";
+const SERIES_COLORS = [ORANGE, BLACK, GRAY, "#4bb4e6", "#50be87", "#ffd200", "#a885d8"];
+const chartHits = new Map();
+const eCharts = new Map();
 
 const state = {
   view: "overview",
-  network: null, customers: null, filters: null,
+  network: null, customers: null, filters: null, cross: null, catalog: null, system: null,
+  crossConfig: { dimension: "region", splitBy: "event_type", metric: "events", limit: 10, chartType: "bar", drillPath: "", drillLevel: 0 },
   compareA: null, compareData: null,     // pinned state A + its fetched payloads
   sel: emptySelection(),
   past: [], future: [],                  // selection history (back / forward)
   sort: { towers: { key: "event_count", dir: -1 }, subs: { key: "event_count", dir: -1 } },
   towerQuery: "", subscriberQuery: "",
   openField: null,
+  dynamicValues: { tower: [], subscriber: [] },
+  dynamicQuery: { tower: "", subscriber: "" },
   requestId: 0,
 };
 
 function emptySelection() {
   return { dateFrom: "", dateTo: "", granularity: "hour",
-           event_type: [], region: [], plan: [], city: [] };
+           event_type: [], region: [], plan: [], city: [], tower: [], subscriber: [] };
 }
 const cloneSel = (sel) => JSON.parse(JSON.stringify(sel));
 const selectionsEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -64,6 +71,15 @@ function paramsFor(sel) {
   if (sel.dateTo) params.set("date_to", sel.dateTo);
   if (sel.granularity !== "hour") params.set("granularity", sel.granularity);
   FIELDS.forEach((field) => { if (sel[field].length) params.set(field, sel[field].join(",")); });
+  return params;
+}
+
+function crossParamsFor(sel) {
+  const params = paramsFor(sel);
+  params.set("dimension", state.crossConfig.dimension);
+  if (state.crossConfig.splitBy) params.set("split_by", state.crossConfig.splitBy);
+  params.set("metric", state.crossConfig.metric);
+  params.set("limit", String(state.crossConfig.limit));
   return params;
 }
 
@@ -117,22 +133,29 @@ async function loadData() {
       fetchJson("/api/network", params),
       fetchJson("/api/customers", params),
       fetchJson("/api/filters", params),
+      fetchJson("/api/cross", crossParamsFor(state.sel)),
+      fetchJson("/api/catalog", new URLSearchParams()),
+      fetchJson("/api/system", new URLSearchParams()),
     ];
     if (state.compareA) {
       const paramsA = paramsFor(state.compareA);
       jobs.push(fetchJson("/api/network", paramsA), fetchJson("/api/customers", paramsA));
     }
-    const [network, customers, filters, compareNetwork, compareCustomers] = await Promise.all(jobs);
+    const [network, customers, filters, cross, catalog, system, compareNetwork, compareCustomers] = await Promise.all(jobs);
     if (requestId !== state.requestId) return;
     state.network = network;
     state.customers = customers;
     state.filters = filters;
+    state.cross = cross;
+    state.catalog = catalog;
+    state.system = system;
     state.compareData = state.compareA ? { network: compareNetwork, customers: compareCustomers } : null;
     renderAll();
     const updated = new Date(network.generated_at);
     $("#updatedAt").textContent = `Updated ${updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     $("#pipelineStatus").textContent = "Pipeline live";
-    $("#footerState").textContent = "Live warehouse";
+    $("#footerState").textContent = `Live warehouse · cache ${formatNumber(system.cache.hit_rate_pct, 1)}%`;
+    evaluateAlerts();
   } catch (error) {
     if (requestId !== state.requestId) return;
     $("#errorBanner").textContent = error.message;
@@ -188,8 +211,57 @@ function renderKpis() {
 
 /* ── Canvas helpers ───────────────────────────────────────────── */
 
+function chartFor(element) {
+  if (!window.echarts) throw new Error("Apache ECharts failed to load");
+  let chart = eCharts.get(element.id);
+  if (!chart) {
+    chart = window.echarts.init(element, null, { renderer: "canvas", useDirtyRect: true });
+    eCharts.set(element.id, chart);
+  }
+  return chart;
+}
+
+function analyticsToolbox(name, zoom = false) {
+  const feature = {
+    dataView: { readOnly: true, title: "View data" },
+    restore: { title: "Reset view" },
+    saveAsImage: { name: `orange-egypt-${name}`, title: "Save image", pixelRatio: 2 },
+  };
+  if (zoom) feature.dataZoom = { title: { zoom: "Zoom", back: "Undo zoom" } };
+  return { show: true, right: 4, top: 0, itemSize: 16, feature };
+}
+
+function applyChart(element, option, onClick) {
+  const chart = chartFor(element);
+  chart.off("click");
+  if (onClick) chart.on("click", onClick);
+  chart.setOption({
+    animationDuration: 380,
+    animationDurationUpdate: 260,
+    color: SERIES_COLORS,
+    textStyle: { fontFamily: "Arial, Helvetica, sans-serif", color: "#333" },
+    aria: { enabled: true, decal: { show: true } },
+    ...option,
+  }, { notMerge: true, lazyUpdate: true });
+  return chart;
+}
+
+function axisTooltip(formatter) {
+  return {
+    trigger: "axis", renderMode: "richText", confine: true,
+    backgroundColor: "#000", borderColor: ORANGE, borderWidth: 2,
+    textStyle: { color: "#fff" }, valueFormatter: (value) => formatter(Number(value)),
+    axisPointer: { type: "shadow", label: { backgroundColor: ORANGE, color: "#000" } },
+  };
+}
+
 function setupCanvas(canvas) {
-  const cssHeight = Number(canvas.getAttribute("height")) || 280;
+  // canvas.height updates the HTML height attribute. Preserve the authored
+  // logical height once so high-DPI redraws never grow the chart repeatedly.
+  if (!canvas.dataset.chartHeight) {
+    canvas.dataset.chartHeight = String(Number(canvas.getAttribute("height")) || 280);
+  }
+  const cssHeight = Number(canvas.dataset.chartHeight);
   const width = Math.max(300, canvas.clientWidth);
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = width * ratio;
@@ -210,40 +282,94 @@ function drawGrid(context, width, height, padding, lines = 4) {
   }
 }
 
+function shortAxisLabel(label) {
+  const parsed = new Date(label);
+  if (Number.isNaN(parsed.getTime())) return String(label ?? "");
+  return parsed.toLocaleString("en-GB", { day: "2-digit", hour: "2-digit", timeZone: "UTC" });
+}
+
+function categoryAxisLabel(label, maxChars) {
+  const text = String(label ?? "");
+  return text.length > maxChars ? `${text.slice(0, Math.max(1, maxChars - 1))}…` : text;
+}
+
 function drawLineChart(canvas, labels, series, colors, formatter = compact, dashedIndexes = new Set()) {
-  const { context, width, height } = setupCanvas(canvas);
-  const padding = { left: 52, right: 18, top: 16, bottom: 40 };
-  const values = series.flatMap((item) => item.values).map(Number);
-  const max = Math.max(...values, 1);
-  drawGrid(context, width, height, padding);
-  context.fillStyle = "#666"; context.font = "11px Arial";
-  for (let i = 0; i <= 4; i += 1) {
-    const value = max - (max * i / 4);
-    const y = padding.top + ((height - padding.top - padding.bottom) * i / 4);
-    context.fillText(formatter(value), 4, y + 4);
-  }
-  series.forEach((item, seriesIndex) => {
-    context.strokeStyle = colors[seriesIndex] || ORANGE;
-    context.lineWidth = seriesIndex === 0 ? 3 : 2;
-    context.setLineDash(dashedIndexes.has(seriesIndex) ? [6, 5] : []);
-    context.beginPath();
-    item.values.forEach((raw, index) => {
-      const x = padding.left + (index * (width - padding.left - padding.right) / Math.max(labels.length - 1, 1));
-      const y = height - padding.bottom - (Number(raw) / max * (height - padding.top - padding.bottom));
-      if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
-    });
-    context.stroke();
+  const zoom = labels.length > 12;
+  applyChart(canvas, {
+    color: colors, toolbox: analyticsToolbox(canvas.id, true), tooltip: axisTooltip(formatter),
+    legend: { top: 2, left: 4, data: series.map((item) => item.name) },
+    grid: { left: 58, right: 24, top: 54, bottom: zoom ? 76 : 46, containLabel: true },
+    xAxis: { type: "category", data: labels.map(shortAxisLabel), boundaryGap: false,
+      axisLabel: { hideOverlap: true, color: "#666" }, axisLine: { lineStyle: { color: "#aaa" } } },
+    yAxis: { type: "value", axisLabel: { formatter, color: "#666" }, splitLine: { lineStyle: { color: "#e5e5e5" } } },
+    dataZoom: zoom ? [{ type: "inside" }, { type: "slider", height: 20, bottom: 8 }] : [],
+    series: series.map((item, index) => ({
+      name: item.name || `Series ${index + 1}`, type: "line", data: item.values.map(Number),
+      symbol: "circle", symbolSize: 7, showSymbol: labels.length < 50,
+      lineStyle: { width: index === 0 ? 3 : 2, type: dashedIndexes.has(index) ? "dashed" : "solid" },
+      emphasis: { focus: "series" },
+    })),
+  }, (params) => {
+    const item = series[params.seriesIndex];
+    if (item?.filterField && item.filterValue) toggleValue(item.filterField, item.filterValue);
   });
-  context.setLineDash([]);
-  context.fillStyle = "#666"; context.textAlign = "center";
-  const ticks = Math.min(5, labels.length);
-  for (let i = 0; i < ticks; i += 1) {
-    const index = Math.round(i * (labels.length - 1) / Math.max(ticks - 1, 1));
-    const x = padding.left + (index * (width - padding.left - padding.right) / Math.max(labels.length - 1, 1));
-    const label = labels[index] ? new Date(labels[index]).toLocaleString("en-GB", { day: "2-digit", hour: "2-digit", timeZone: "UTC" }) : "";
-    context.fillText(label, x, height - 12);
-  }
-  context.textAlign = "left";
+}
+
+function drawHorizontalBarChart(canvas, rows, labelKey, valueKey, color = ORANGE, formatter = compact, options = {}) {
+  const data = rows || [];
+  const labels = data.map((row) => String(row[labelKey] ?? "—"));
+  applyChart(canvas, {
+    color: [color], toolbox: analyticsToolbox(canvas.id), tooltip: axisTooltip(formatter),
+    grid: { left: 18, right: 42, top: 42, bottom: 12, containLabel: true },
+    xAxis: { type: "value", axisLabel: { formatter }, splitLine: { lineStyle: { color: "#e5e5e5" } } },
+    yAxis: { type: "category", inverse: true, data: labels, axisLabel: { width: 110, overflow: "truncate", color: "#333" } },
+    series: [{ name: options.seriesName || "Value", type: "bar", data: data.map((row) => Number(row[valueKey] || 0)),
+      showBackground: true, backgroundStyle: { color: "#f1f1f1" },
+      label: { show: true, position: "right", formatter: (params) => formatter(params.value), fontWeight: 700 },
+      itemStyle: { color }, emphasis: { itemStyle: { color: GREEN } } }],
+  }, (params) => {
+    const selected = String(data[params.dataIndex]?.[labelKey] ?? params.name);
+    if (options.onSelect) options.onSelect(selected);
+    else if (options.filterField) toggleValue(options.filterField, selected);
+  });
+}
+
+function drawGroupedBarChart(canvas, labels, series, colors, formatter = compact, options = {}) {
+  const zoom = labels.length > 8;
+  const chartType = options.chartType === "line" ? "line" : "bar";
+  applyChart(canvas, {
+    color: colors, toolbox: analyticsToolbox(canvas.id, true), tooltip: axisTooltip(formatter),
+    legend: { top: 2, left: 4, type: "scroll", data: series.map((item) => item.name) },
+    grid: { left: 55, right: 24, top: 58, bottom: zoom ? 80 : 48, containLabel: true },
+    xAxis: { type: "category", data: labels, axisLabel: { hideOverlap: true, interval: 0,
+      rotate: labels.length > 8 ? 28 : 0, formatter: (value) => categoryAxisLabel(value, 14) } },
+    yAxis: { type: "value", axisLabel: { formatter }, splitLine: { lineStyle: { color: "#e5e5e5" } } },
+    dataZoom: zoom ? [{ type: "inside" }, { type: "slider", height: 20, bottom: 5 }] : [],
+    series: series.map((item) => ({ name: item.name, type: chartType, data: item.values.map(Number),
+      stack: options.stack ? "total" : undefined, smooth: chartType === "line", symbolSize: 7,
+      emphasis: { focus: "series" } })),
+  }, (params) => {
+    const item = series[params.seriesIndex];
+    const selected = String(labels[params.dataIndex] ?? params.name);
+    if (options.onSelect) options.onSelect(selected);
+    else if (options.labelField) toggleValue(options.labelField, selected);
+    else if (item?.filterField && item.filterValue) toggleValue(item.filterField, item.filterValue);
+  });
+}
+
+function drawPieChart(element, rows, labelKey, valueKey, formatter = compact, options = {}) {
+  const data = (rows || []).map((row) => ({ name: String(row[labelKey]), value: Number(row[valueKey] || 0) }));
+  applyChart(element, {
+    toolbox: analyticsToolbox(element.id),
+    tooltip: { trigger: "item", renderMode: "richText", valueFormatter: formatter, confine: true },
+    legend: { type: "scroll", orient: "vertical", right: 4, top: 42, bottom: 10 },
+    series: [{ name: options.seriesName || "Value", type: "pie", radius: ["38%", "72%"], center: ["42%", "54%"],
+      selectedMode: "multiple", label: { formatter: "{b}\n{d}%" }, data,
+      emphasis: { scaleSize: 8, itemStyle: { shadowBlur: 12, shadowColor: "rgba(0,0,0,.25)" } } }],
+  }, (params) => {
+    if (options.onSelect) options.onSelect(params.name);
+    else if (options.filterField) toggleValue(options.filterField, params.name);
+  });
 }
 
 /* ── Charts ───────────────────────────────────────────────────── */
@@ -254,6 +380,8 @@ function renderTrafficChart() {
   const types = ["data", "voice", "sms"];
   const series = types.map((type) => ({
     name: type,
+    filterField: "event_type",
+    filterValue: type,
     values: labels.map((hour) => Number(rows.find((row) => row.hour_utc === hour && row.event_type === type)?.event_count || 0))
   }));
   const colors = [ORANGE, BLACK, GRAY];
@@ -279,25 +407,19 @@ let mixSlices = [];
 
 function renderMixChart() {
   const rows = state.network.service_mix;
-  const canvas = $("#mixChart");
-  const { context, width, height } = setupCanvas(canvas);
   const total = rows.reduce((sum, row) => sum + Number(row.event_count), 0) || 1;
   const colors = { data: ORANGE, voice: BLACK, sms: GRAY };
-  const radius = Math.min(width, height) * .33;
-  let angle = -Math.PI / 2;
-  mixSlices = [];
-  rows.forEach((row) => {
-    const slice = Number(row.event_count) / total * Math.PI * 2;
-    const selected = state.sel.event_type.includes(row.event_type);
-    context.beginPath(); context.moveTo(width / 2, height / 2); context.arc(width / 2, height / 2, radius + (selected ? 8 : 0), angle, angle + slice); context.closePath();
-    context.fillStyle = colors[row.event_type] || LIGHT; context.fill();
-    if (selected) { context.strokeStyle = GREEN; context.lineWidth = 3; context.stroke(); }
-    mixSlices.push({ from: angle, to: angle + slice, type: row.event_type });
-    angle += slice;
-  });
-  context.beginPath(); context.arc(width / 2, height / 2, radius * .56, 0, Math.PI * 2); context.fillStyle = "white"; context.fill();
-  context.fillStyle = BLACK; context.textAlign = "center"; context.font = "bold 28px Arial"; context.fillText(compact(total), width / 2, height / 2 + 4);
-  context.fillStyle = "#666"; context.font = "11px Arial"; context.fillText("EVENTS", width / 2, height / 2 + 24); context.textAlign = "left";
+  applyChart($("#mixChart"), {
+    color: rows.map((row) => colors[row.event_type] || LIGHT),
+    toolbox: analyticsToolbox("service-mix"),
+    tooltip: { trigger: "item", renderMode: "richText", confine: true, valueFormatter: compact },
+    legend: { show: false },
+    graphic: [{ type: "text", left: "center", top: "44%", style: { text: compact(total), font: "900 28px Arial", fill: BLACK, textAlign: "center" } },
+      { type: "text", left: "center", top: "56%", style: { text: "EVENTS", font: "700 11px Arial", fill: "#666", textAlign: "center" } }],
+    series: [{ name: "Service mix", type: "pie", radius: ["48%", "76%"], center: ["50%", "50%"],
+      selectedMode: "multiple", data: rows.map((row) => ({ name: row.event_type, value: Number(row.event_count), selected: state.sel.event_type.includes(row.event_type) })),
+      label: { formatter: "{b}\n{d}%" }, emphasis: { scaleSize: 8 } }],
+  }, (params) => toggleValue("event_type", params.name));
   $("#mixLegend").innerHTML = rows.map((row) => `<button class="mix-item${state.sel.event_type.includes(row.event_type) ? " selected" : ""}" data-select-type="${escapeHtml(row.event_type)}"><i style="background:${colors[row.event_type] || LIGHT}"></i>${escapeHtml(row.event_type)} ${formatNumber(Number(row.event_count) / total * 100, 1)}%</button>`).join("");
 }
 
@@ -354,7 +476,9 @@ function renderHeatmap() {
 
 function renderMap() {
   const towers = state.network.towers;
-  const { context, width, height } = setupCanvas($("#towerMap"));
+  const canvas = $("#towerMap");
+  const { context, width, height } = setupCanvas(canvas);
+  const hits = [];
   context.fillStyle = "#080808"; context.fillRect(0, 0, width, height);
   context.strokeStyle = "#292929"; context.lineWidth = 1;
   for (let x = 0; x <= width; x += width / 8) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke(); }
@@ -367,23 +491,226 @@ function renderMap() {
     const x = 24 + ((Number(tower.longitude) - minLon) / Math.max(maxLon - minLon, .001)) * (width - 48);
     const y = height - 24 - ((Number(tower.latitude) - minLat) / Math.max(maxLat - minLat, .001)) * (height - 48);
     const intensity = Number(tower.event_count) / maxEvents;
-    context.beginPath(); context.arc(x, y, 2.5 + intensity * 7, 0, Math.PI * 2);
+    const radius = 2.5 + intensity * 7;
+    context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2);
     context.fillStyle = `rgba(255,121,0,${.28 + intensity * .72})`; context.fill();
+    hits.push({ shape: "point", x, y, radius: Math.max(radius, 7), label: tower.cell_tower_id,
+      series: tower.region, formatted: `${formatNumber(tower.event_count)} events`,
+      field: "tower", filterValue: tower.cell_tower_id });
   });
   context.fillStyle = "rgba(255,255,255,.72)"; context.font = "bold 12px Arial"; context.fillText("EGYPT TOWER FOOTPRINT", 18, 24);
+  chartHits.set(canvas.id, hits);
+  canvas.classList.add("is-interactive");
+}
+
+function renderTopTowers() {
+  drawHorizontalBarChart(
+    $("#topTowerChart"),
+    (state.network.top_towers || []).slice(0, 10),
+    "cell_tower_id",
+    "event_count",
+    ORANGE,
+    compact,
+    { seriesName: "Usage events", filterField: "tower" }
+  );
+}
+
+function renderRegionalData() {
+  const rows = [...(state.network.regions || [])].sort((a, b) => Number(b.data_gb) - Number(a.data_gb));
+  drawHorizontalBarChart($("#regionDataChart"), rows, "region", "data_gb", ORANGE,
+    (value) => `${formatNumber(value, 2)} GB`, { seriesName: "Data traffic", filterField: "region" });
+}
+
+function renderPlanData() {
+  drawHorizontalBarChart(
+    $("#planDataChart"),
+    state.customers.plan_data || [],
+    "plan_type",
+    "avg_mb_per_subscriber",
+    ORANGE,
+    (value) => `${formatNumber(value, 1)} MB`,
+    { seriesName: "Average data", filterField: "plan" }
+  );
+}
+
+function renderCityActivity() {
+  const rows = state.customers.cities || [];
+  drawGroupedBarChart(
+    $("#cityActivityChart"),
+    rows.map((row) => row.city),
+    [
+      { name: "Active", values: rows.map((row) => row.active_subscribers) },
+      { name: "Total", values: rows.map((row) => row.subscriber_count) },
+    ],
+    [ORANGE, BLACK],
+    compact,
+    { labelField: "city" }
+  );
+}
+
+function renderTopSubscribers() {
+  drawHorizontalBarChart(
+    $("#topSubscriberChart"),
+    (state.customers.top_subscribers || []).slice(0, 10),
+    "subscriber_id",
+    "event_count",
+    ORANGE,
+    compact,
+    { seriesName: "Usage events", filterField: "subscriber" }
+  );
 }
 
 function renderWeekday() {
   const rows = state.customers.weekday;
   const labels = ["Weekday", "Weekend"];
   const types = ["data", "voice", "sms"];
-  const series = types.map((type) => ({ values: labels.map((day) => Number(rows.find((row) => row.day_type === day && row.event_type === type)?.event_count || 0)) }));
-  drawLineChart($("#weekdayChart"), labels, series, [ORANGE, BLACK, GRAY]);
+  const series = types.map((type) => ({ name: type, filterField: "event_type", filterValue: type,
+    values: labels.map((day) => Number(rows.find((row) => row.day_type === day && row.event_type === type)?.event_count || 0)) }));
+  drawGroupedBarChart($("#weekdayChart"), labels, series, [ORANGE, BLACK, GRAY]);
 }
 
 function renderQuality() {
   const rows = state.network.quarantine;
-  drawLineChart($("#qualityChart"), rows.map((row) => row.hour_utc), [{ values: rows.map((row) => row.rate_pct) }], [ORANGE], (value) => `${formatNumber(value, 1)}%`);
+  drawLineChart($("#qualityChart"), rows.map((row) => row.hour_utc), [{ name: "Quarantine rate", values: rows.map((row) => row.rate_pct) }], [ORANGE], (value) => `${formatNumber(value, 1)}%`);
+}
+
+function renderQualityVolume() {
+  const rows = state.network.quarantine || [];
+  drawLineChart(
+    $("#qualityVolumeChart"),
+    rows.map((row) => row.hour_utc),
+    [
+      { name: "Raw", values: rows.map((row) => row.raw_rows) },
+      { name: "Accepted", values: rows.map((row) => row.fact_rows) },
+      { name: "Quarantine", values: rows.map((row) => row.quarantine_rows) },
+    ],
+    [BLACK, ORANGE, GRAY]
+  );
+}
+
+function crossFormatter(value) {
+  if (state.cross?.metric === "data_mb") return `${formatNumber(value, 1)} MB`;
+  if (state.cross?.metric === "voice_minutes") return `${formatNumber(value, 1)} min`;
+  return compact(value);
+}
+
+function activeDrillPath() {
+  return state.catalog?.drill_paths?.find((path) => path.id === state.crossConfig.drillPath) || null;
+}
+
+function selectCrossValue(value) {
+  const dimension = state.cross?.dimension;
+  if (!dimension || !FIELDS.includes(dimension)) return;
+  const alreadySelected = state.sel[dimension].includes(value);
+  const path = activeDrillPath();
+  if (path && !alreadySelected) {
+    const index = path.dimensions.indexOf(dimension);
+    if (index >= 0 && index < path.dimensions.length - 1) {
+      state.crossConfig.drillLevel = index + 1;
+      state.crossConfig.dimension = path.dimensions[index + 1];
+      state.crossConfig.splitBy = "";
+    }
+  }
+  toggleValue(dimension, value);
+}
+
+function renderDrillBreadcrumb() {
+  const target = $("#drillBreadcrumb");
+  const path = activeDrillPath();
+  if (!path) { target.hidden = true; target.innerHTML = ""; return; }
+  target.innerHTML = `<span>Drill path:</span>${path.dimensions.map((dimension, index) => {
+    const meta = state.catalog.dimensions.find((item) => item.id === dimension);
+    return `<button data-drill-level="${index}" class="${dimension === state.crossConfig.dimension ? "active" : ""}">${escapeHtml(meta?.label || dimension)}</button>${index < path.dimensions.length - 1 ? "<span>›</span>" : ""}`;
+  }).join("")}`;
+  target.hidden = false;
+}
+
+function renderCrossAnalysis() {
+  const data = state.cross;
+  if (!data) return;
+  $("#crossDimension").value = data.dimension;
+  $("#crossSplit").value = data.split_by || "";
+  $("#crossMetric").value = data.metric;
+  $("#crossLimit").value = String(data.limit);
+  $("#crossChartType").value = state.crossConfig.chartType;
+  $("#crossDrillPath").value = state.crossConfig.drillPath;
+  $$("#crossSplit option").forEach((option) => {
+    option.disabled = option.value !== "" && option.value === data.dimension;
+  });
+
+  const labels = [...new Set(data.rows.map((row) => row.dimension_value))];
+  const seriesNames = [...new Set(data.rows.map((row) => row.series_value))];
+  const filterField = FIELDS.includes(data.dimension) ? data.dimension : null;
+  if (data.split_by) {
+    const series = seriesNames.map((seriesName) => ({
+      name: seriesName,
+      values: labels.map((label) => Number(data.rows.find((row) =>
+        row.dimension_value === label && row.series_value === seriesName)?.metric_value || 0)),
+    }));
+    drawGroupedBarChart($("#crossChart"), labels, series, SERIES_COLORS, crossFormatter, {
+      labelField: filterField,
+      chartType: state.crossConfig.chartType,
+      stack: state.crossConfig.chartType === "stacked",
+      onSelect: selectCrossValue,
+    });
+  } else if (state.crossConfig.chartType === "pie") {
+    drawPieChart($("#crossChart"), data.rows, "dimension_value", "metric_value", crossFormatter,
+      { seriesName: data.metric_label, filterField, onSelect: selectCrossValue });
+  } else if (state.crossConfig.chartType === "line") {
+    drawGroupedBarChart($("#crossChart"), labels, [{ name: data.metric_label, values: data.rows.map((row) => Number(row.metric_value)) }],
+      [ORANGE], crossFormatter, { labelField: filterField, chartType: "line", onSelect: selectCrossValue });
+  } else {
+    drawHorizontalBarChart($("#crossChart"), data.rows, "dimension_value", "metric_value",
+      ORANGE, crossFormatter, { seriesName: data.metric_label, filterField, onSelect: selectCrossValue });
+  }
+
+  $("#crossSubtitle").textContent = data.split_label
+    ? `${data.dimension_label} × ${data.split_label}` : data.dimension_label;
+  $("#crossTitle").textContent = `${data.metric_label} comparison`;
+  $("#crossDimensionHead").textContent = data.dimension_label;
+  $("#crossSeriesHead").textContent = data.split_label || "Series";
+  $("#crossMetricHead").textContent = data.metric_label;
+  const splitFilterField = FIELDS.includes(data.split_by) ? data.split_by : null;
+  $("#crossLegend").innerHTML = data.split_by ? seriesNames.map((name, index) => {
+    const interaction = splitFilterField ? ` data-field="${splitFilterField}" data-value="${escapeHtml(name)}"` : "";
+    return `<button class="mix-item"${interaction}><i style="background:${SERIES_COLORS[index % SERIES_COLORS.length]}"></i>${escapeHtml(name)}</button>`;
+  }).join("") : '<span><i style="background:#ff7900"></i>Selected metric</span>';
+  $("#crossTable").innerHTML = data.rows.map((row) => `<tr>
+    <td><b>${escapeHtml(row.dimension_value)}</b></td><td>${escapeHtml(row.series_value)}</td>
+    <td>${escapeHtml(crossFormatter(row.metric_value))}</td><td>${escapeHtml(crossFormatter(row.total_value))}</td>
+  </tr>`).join("");
+  renderDrillBreadcrumb();
+}
+
+function chartHitAt(canvas, event) {
+  const hits = chartHits.get(canvas.id) || [];
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  return hits.find((hit) => hit.shape === "rect"
+    ? x >= hit.x && x <= hit.x + hit.width && y >= hit.y && y <= hit.y + hit.height
+    : Math.hypot(x - hit.x, y - hit.y) <= hit.radius);
+}
+
+function moveChartTooltip(event) {
+  const canvas = event.target.closest("canvas");
+  if (!canvas) return;
+  const tooltip = $("#chartTooltip");
+  const hit = chartHitAt(canvas, event);
+  if (!hit) { tooltip.hidden = true; return; }
+  tooltip.innerHTML = `<b>${escapeHtml(hit.label)}</b>${escapeHtml(hit.series)}: ${escapeHtml(hit.formatted)}${hit.field ? "<small>Click to filter all analytics</small>" : ""}`;
+  tooltip.style.left = `${Math.min(event.clientX + 14, window.innerWidth - 250)}px`;
+  tooltip.style.top = `${Math.min(event.clientY + 14, window.innerHeight - 90)}px`;
+  tooltip.hidden = false;
+}
+
+function clickChartHit(event) {
+  const canvas = event.target.closest("canvas");
+  if (!canvas || canvas.id === "mixChart") return;
+  const hit = chartHitAt(canvas, event);
+  if (hit?.field && hit.filterValue && FIELDS.includes(hit.field)) {
+    toggleValue(hit.field, hit.filterValue);
+  }
 }
 
 /* ── Tables: sortable + searchable ────────────────────────────── */
@@ -444,6 +771,7 @@ function renderSelectionChips() {
   $("#historyForward").disabled = !state.future.length;
   FIELDS.forEach((field) => {
     const summary = $(`[data-summary="${field}"]`);
+    if (!summary) return;
     summary.textContent = state.sel[field].length ? state.sel[field].join(", ") : FIELD_EMPTY[field];
     summary.closest(".field-tile").classList.toggle("has-selection", state.sel[field].length > 0);
   });
@@ -451,33 +779,56 @@ function renderSelectionChips() {
   $("#dateTo").value = state.sel.dateTo;
 }
 
+async function loadDynamicValues(field, query = "") {
+  const params = paramsFor(state.sel);
+  params.set("field", field);
+  params.set("q", query);
+  params.set("limit", "60");
+  try {
+    const payload = await fetchJson("/api/values", params);
+    state.dynamicValues[field] = payload.rows;
+    state.dynamicQuery[field] = query;
+    if (state.openField === field) renderFieldPopover();
+  } catch (error) {
+    $("#errorBanner").textContent = error.message;
+    $("#errorBanner").hidden = false;
+  }
+}
+
 function renderFieldPopover() {
   const popover = $("#fieldPopover");
   if (!state.openField || !state.filters) { popover.hidden = true; return; }
   const field = state.openField;
-  const values = state.filters.fields[field];
+  const dynamic = field === "tower" || field === "subscriber";
+  const values = dynamic ? state.dynamicValues[field] : state.filters.fields[field];
   popover.innerHTML = `
     <div class="popover-head"><b>${FIELD_LABELS[field]}</b>
       <button class="text-button" data-popover-clear="${field}">Clear field</button>
       <button class="popover-close" aria-label="Close">×</button></div>
-    <input type="search" class="popover-search" placeholder="Search values…" aria-label="Search ${FIELD_LABELS[field]} values">
-    <div class="popover-values">${values.map((item) => `
+    <input type="search" class="popover-search" value="${escapeHtml(dynamic ? state.dynamicQuery[field] : "")}" placeholder="Search values…" aria-label="Search ${FIELD_LABELS[field]} values">
+    <div class="popover-values">${values.length ? values.map((item) => `
       <button class="popover-value${item.selected ? " selected" : (item.possible ? "" : " excluded")}"
               data-field="${field}" data-value="${escapeHtml(item.value)}">
         <span class="value-state" aria-hidden="true"></span>
         <span class="value-name">${escapeHtml(item.value)}</span>
         <span class="value-count">${compact(item.event_count)}</span>
-      </button>`).join("")}</div>`;
+      </button>`).join("") : `<p class="search-empty">${dynamic ? "Type to search or wait for values…" : "No possible values"}</p>`}</div>`;
   const tile = $(`.field-tile[data-field="${field}"]`);
   const rect = tile.getBoundingClientRect();
   popover.style.left = `${Math.min(rect.left, window.innerWidth - 300)}px`;
   popover.style.top = `${rect.bottom + window.scrollY + 6}px`;
   popover.hidden = false;
+  let searchTimer;
   popover.querySelector(".popover-search").addEventListener("input", (event) => {
-    const query = event.target.value.toLowerCase();
-    popover.querySelectorAll(".popover-value").forEach((button) => {
-      button.style.display = button.dataset.value.toLowerCase().includes(query) ? "" : "none";
-    });
+    const query = event.target.value.trim();
+    if (dynamic) {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => loadDynamicValues(field, query), 240);
+    } else {
+      popover.querySelectorAll(".popover-value").forEach((button) => {
+        button.style.display = button.dataset.value.toLowerCase().includes(query.toLowerCase()) ? "" : "none";
+      });
+    }
   });
 }
 
@@ -502,6 +853,112 @@ function renderBookmarkPanel() {
 function summarizeSelection(sel) {
   const entries = selectionEntries(sel);
   return entries.length ? entries.map((entry) => `${entry.label}: ${entry.value}`).join(" · ") : "All live data";
+}
+
+const ALERT_METRICS = [
+  ["total_events", "Total events"], ["data_gb", "Data traffic (GB)"],
+  ["voice_minutes", "Voice minutes"], ["sms_messages", "SMS messages"],
+  ["active_towers", "Active towers"], ["active_subscribers", "Active subscribers"],
+  ["quarantine_rate_pct", "Quarantine rate (%)"],
+];
+
+function loadAlerts() {
+  try { return JSON.parse(localStorage.getItem(ALERT_KEY)) || []; } catch { return []; }
+}
+
+function saveAlerts(alerts) {
+  localStorage.setItem(ALERT_KEY, JSON.stringify(alerts.slice(0, 30)));
+}
+
+function currentMetricValues() {
+  return { ...(state.network?.kpis || {}), ...(state.customers?.kpis || {}) };
+}
+
+function evaluateAlerts() {
+  if (!state.network || !state.customers) return;
+  const values = currentMetricValues();
+  const alerts = loadAlerts();
+  let changed = false;
+  alerts.forEach((alert) => {
+    const value = Number(values[alert.metric] ?? 0);
+    const triggered = alert.operator === ">" ? value > alert.threshold : value < alert.threshold;
+    if (alert.triggered !== triggered || alert.lastValue !== value) changed = true;
+    if (triggered && !alert.triggered) showToast(`Alert triggered: ${alert.label} ${alert.operator} ${formatNumber(alert.threshold, 2)}`);
+    alert.triggered = triggered;
+    alert.lastValue = value;
+    alert.checkedAt = new Date().toISOString();
+  });
+  if (changed) saveAlerts(alerts);
+  const triggeredCount = alerts.filter((alert) => alert.triggered).length;
+  $("#alertButton").textContent = triggeredCount ? `⚑ Alerts (${triggeredCount})` : "⚑ Alerts";
+  $("#alertButton").classList.toggle("active-mode", triggeredCount > 0);
+  if (!$("#alertPanel").hidden) renderAlertPanel();
+}
+
+function renderAlertPanel() {
+  const panel = $("#alertPanel");
+  const alerts = loadAlerts();
+  panel.innerHTML = `
+    <div class="popover-head"><b>Data alerts</b><button class="popover-close" aria-label="Close">×</button></div>
+    <small>Rules are evaluated after every refresh and stored only in this browser.</small>
+    <div class="alert-form">
+      <select id="alertMetric" style="grid-column:span 2">${ALERT_METRICS.map(([key, label]) => `<option value="${key}">${label}</option>`).join("")}</select>
+      <select id="alertOperator"><option value=">">Above</option><option value="<">Below</option></select>
+      <input id="alertThreshold" type="number" step="any" value="5" aria-label="Alert threshold">
+      <button class="orange-button alert-create">Create alert</button>
+    </div>
+    <div>${alerts.length ? alerts.map((alert, index) => `<div class="alert-row ${alert.triggered ? "triggered" : "ok"}">
+      <div><b>${escapeHtml(alert.label)} ${escapeHtml(alert.operator)} ${formatNumber(alert.threshold, 2)}</b>
+      <small>Current ${formatNumber(alert.lastValue, 2)} · ${alert.triggered ? "Triggered" : "Within range"}</small></div>
+      <button class="alert-delete" data-alert-delete="${index}" aria-label="Delete alert">×</button></div>`).join("") : '<p class="bookmark-empty">No alert rules yet.</p>'}</div>`;
+}
+
+function showToast(message) {
+  const previous = $(".toast");
+  if (previous) previous.remove();
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3200);
+}
+
+function shareableUrl() {
+  const params = paramsFor(state.sel);
+  params.set("view", state.view);
+  Object.entries(state.crossConfig).forEach(([key, value]) => params.set(`cross_${key}`, String(value)));
+  return `${location.origin}${location.pathname}?${params}`;
+}
+
+async function shareAnalysis() {
+  const url = shareableUrl();
+  history.replaceState(null, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("Shareable analysis link copied");
+  } catch {
+    prompt("Copy this shareable analysis link:", url);
+  }
+}
+
+function restoreSharedState() {
+  const params = new URLSearchParams(location.search);
+  if (!params.size) return;
+  state.sel.dateFrom = params.get("date_from") || "";
+  state.sel.dateTo = params.get("date_to") || "";
+  state.sel.granularity = params.get("granularity") || "hour";
+  FIELDS.forEach((field) => { state.sel[field] = (params.get(field) || "").split(",").filter(Boolean); });
+  const view = params.get("view");
+  if (["overview", "network", "customers", "cross", "quality"].includes(view)) state.view = view;
+  const map = { dimension: "dimension", splitBy: "splitBy", metric: "metric", chartType: "chartType", drillPath: "drillPath" };
+  Object.entries(map).forEach(([key, property]) => {
+    const value = params.get(`cross_${key}`);
+    if (value !== null) state.crossConfig[property] = value;
+  });
+  const limit = Number(params.get("cross_limit"));
+  if ([5, 10, 15, 20].includes(limit)) state.crossConfig.limit = limit;
+  const level = Number(params.get("cross_drillLevel"));
+  if (Number.isInteger(level) && level >= 0) state.crossConfig.drillLevel = level;
 }
 
 function renderCompareStrip() {
@@ -546,7 +1003,7 @@ function renderSearchResults(query) {
   if (!query || !state.filters) { box.hidden = true; box.innerHTML = ""; return; }
   const lowered = query.toLowerCase();
   const hits = [];
-  FIELDS.forEach((field) => state.filters.fields[field].forEach((item) => {
+  FIELDS.forEach((field) => (state.filters.fields[field] || state.dynamicValues[field] || []).forEach((item) => {
     if (item.value.toLowerCase().includes(lowered)) hits.push({ field, ...item });
   }));
   box.innerHTML = hits.length ? hits.slice(0, 12).map((hit) => `
@@ -557,19 +1014,43 @@ function renderSearchResults(query) {
   box.hidden = false;
 }
 
+let globalSearchTimer;
+function updateGlobalSearch(query) {
+  renderSearchResults(query);
+  clearTimeout(globalSearchTimer);
+  if (query.length < 2) return;
+  globalSearchTimer = setTimeout(async () => {
+    await Promise.all([loadDynamicValues("tower", query), loadDynamicValues("subscriber", query)]);
+    renderSearchResults(query);
+  }, 280);
+}
+
 /* ── Rendering root ───────────────────────────────────────────── */
 
 function renderAll() {
-  renderKpis(); renderTrafficChart(); renderMixChart(); renderHeatmap(); renderMap(); renderWeekday(); renderQuality(); renderTables();
+  renderKpis();
+  if (state.view === "network") {
+    renderTrafficChart(); renderMixChart(); renderHeatmap(); renderMap();
+    renderTopTowers(); renderRegionalData(); renderTables();
+  } else if (state.view === "customers") {
+    renderPlanData(); renderCityActivity(); renderWeekday(); renderTopSubscribers(); renderTables();
+  } else if (state.view === "cross") {
+    renderCrossAnalysis();
+  } else if (state.view === "quality") {
+    renderQuality(); renderQualityVolume();
+  }
   const regionRows = Object.fromEntries(state.network.regions.map((row) => [row.region, row]));
   const planRows = Object.fromEntries(state.customers.plans.map((row) => [row.plan_type, row]));
   const cityRows = Object.fromEntries(state.customers.cities.map((row) => [row.city, row]));
-  renderSelectableBars("#regionBars", "region", regionRows, "event_count");
-  renderSelectableBars("#planBars", "plan", planRows, "event_count");
-  renderSelectableBars("#cityBars", "city", cityRows, "subscriber_count");
+  if (state.view === "network") renderSelectableBars("#regionBars", "region", regionRows, "event_count");
+  if (state.view === "customers") {
+    renderSelectableBars("#planBars", "plan", planRows, "event_count");
+    renderSelectableBars("#cityBars", "city", cityRows, "subscriber_count");
+  }
   renderSelectionChips();
   renderFieldPopover();
   renderCompareStrip();
+  requestAnimationFrame(() => eCharts.forEach((chart) => chart.resize()));
 }
 
 function setView(view, scroll = true) {
@@ -615,16 +1096,61 @@ function bindEvents() {
     commit((sel) => { sel[id] = event.target.value; });
   }));
 
+  ["crossDimension", "crossSplit", "crossMetric", "crossLimit", "crossChartType", "crossDrillPath"].forEach((id) =>
+    $(`#${id}`).addEventListener("change", () => {
+      const drillPathId = $("#crossDrillPath").value;
+      if (id === "crossDrillPath") {
+        state.crossConfig.drillPath = drillPathId;
+        state.crossConfig.drillLevel = 0;
+        const path = state.catalog?.drill_paths?.find((item) => item.id === drillPathId);
+        if (path) {
+          $("#crossDimension").value = path.dimensions[0];
+          $("#crossSplit").value = "";
+        }
+      } else if (id === "crossDimension") {
+        state.crossConfig.drillPath = "";
+        $("#crossDrillPath").value = "";
+      }
+      state.crossConfig.dimension = $("#crossDimension").value;
+      state.crossConfig.splitBy = $("#crossSplit").value;
+      state.crossConfig.metric = $("#crossMetric").value;
+      state.crossConfig.limit = Number($("#crossLimit").value);
+      state.crossConfig.chartType = $("#crossChartType").value;
+      if (state.crossConfig.chartType === "pie") {
+        state.crossConfig.splitBy = "";
+        $("#crossSplit").value = "";
+      }
+      if (state.crossConfig.dimension === state.crossConfig.splitBy) {
+        state.crossConfig.splitBy = "";
+        $("#crossSplit").value = "";
+      }
+      loadData();
+    })
+  );
+
   // Field tiles open the associative value popover.
   $$(".field-tile").forEach((tile) => tile.addEventListener("click", (event) => {
     event.stopPropagation();
-    $("#bookmarkPanel").hidden = true;
+    $("#bookmarkPanel").hidden = true; $("#alertPanel").hidden = true;
     state.openField = state.openField === tile.dataset.field ? null : tile.dataset.field;
     renderFieldPopover();
+    if (state.openField === "tower" || state.openField === "subscriber") loadDynamicValues(state.openField);
   }));
 
   // One delegated listener: popover values, chips, bar rows, legends, search hits.
   document.addEventListener("click", (event) => {
+    const drillButton = event.target.closest("[data-drill-level]");
+    if (drillButton) {
+      const path = activeDrillPath();
+      const level = Number(drillButton.dataset.drillLevel);
+      if (path?.dimensions[level]) {
+        state.crossConfig.drillLevel = level;
+        state.crossConfig.dimension = path.dimensions[level];
+        state.crossConfig.splitBy = "";
+        loadData();
+      }
+      return;
+    }
     const valueButton = event.target.closest("[data-field][data-value]");
     if (valueButton) { toggleValue(valueButton.dataset.field, valueButton.dataset.value); return; }
     const typeButton = event.target.closest("[data-select-type]");
@@ -643,7 +1169,11 @@ function bindEvents() {
     const applyBookmark = event.target.closest("[data-bookmark]");
     if (applyBookmark) {
       const bookmark = loadBookmarks()[Number(applyBookmark.dataset.bookmark)];
-      if (bookmark) commit((sel) => Object.assign(sel, cloneSel(bookmark.sel)));
+      if (bookmark) {
+        if (bookmark.crossConfig) state.crossConfig = { ...state.crossConfig, ...bookmark.crossConfig };
+        if (bookmark.view) setView(bookmark.view, false);
+        commit((sel) => Object.assign(sel, emptySelection(), cloneSel(bookmark.sel)));
+      }
       $("#bookmarkPanel").hidden = true;
       return;
     }
@@ -655,22 +1185,43 @@ function bindEvents() {
       renderBookmarkPanel();
       return;
     }
+    const deleteAlert = event.target.closest("[data-alert-delete]");
+    if (deleteAlert) {
+      const alerts = loadAlerts();
+      alerts.splice(Number(deleteAlert.dataset.alertDelete), 1);
+      saveAlerts(alerts); evaluateAlerts(); renderAlertPanel();
+      return;
+    }
+    if (event.target.closest(".alert-create")) {
+      const metric = $("#alertMetric").value;
+      const label = ALERT_METRICS.find(([key]) => key === metric)?.[1] || metric;
+      const operator = $("#alertOperator").value;
+      const threshold = Number($("#alertThreshold").value);
+      if (Number.isFinite(threshold)) {
+        const alerts = loadAlerts();
+        alerts.unshift({ metric, label, operator, threshold, triggered: false, lastValue: 0 });
+        saveAlerts(alerts); evaluateAlerts(); renderAlertPanel();
+      }
+      return;
+    }
     if (event.target.closest(".bookmark-save")) {
       const name = prompt("Bookmark name:", summarizeSelection(state.sel).slice(0, 40));
       if (name) {
         const bookmarks = loadBookmarks();
-        bookmarks.unshift({ name, summary: summarizeSelection(state.sel), sel: cloneSel(state.sel) });
+        bookmarks.unshift({ name, summary: `${state.view} · ${summarizeSelection(state.sel)}`, sel: cloneSel(state.sel),
+          crossConfig: { ...state.crossConfig }, view: state.view });
         localStorage.setItem(BOOKMARK_KEY, JSON.stringify(bookmarks.slice(0, 20)));
         renderBookmarkPanel();
       }
       return;
     }
     if (event.target.closest(".popover-close")) {
-      state.openField = null; $("#fieldPopover").hidden = true; $("#bookmarkPanel").hidden = true; return;
+      state.openField = null; $("#fieldPopover").hidden = true; $("#bookmarkPanel").hidden = true; $("#alertPanel").hidden = true; return;
     }
     // Click-away closes popovers.
     if (!event.target.closest("#fieldPopover")) { state.openField = null; $("#fieldPopover").hidden = true; }
     if (!event.target.closest("#bookmarkPanel") && !event.target.closest("#bookmarkButton")) $("#bookmarkPanel").hidden = true;
+    if (!event.target.closest("#alertPanel") && !event.target.closest("#alertButton")) $("#alertPanel").hidden = true;
     if (!event.target.closest(".global-search")) $("#searchResults").hidden = true;
   });
 
@@ -689,6 +1240,20 @@ function bindEvents() {
     panel.hidden = !panel.hidden;
   });
 
+  $("#alertButton").addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.openField = null; $("#fieldPopover").hidden = true; $("#bookmarkPanel").hidden = true;
+    renderAlertPanel();
+    const panel = $("#alertPanel");
+    const rect = event.currentTarget.getBoundingClientRect();
+    panel.style.left = `${Math.min(rect.left, window.innerWidth - 380)}px`;
+    panel.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    panel.hidden = !panel.hidden;
+  });
+
+  $("#shareButton").addEventListener("click", shareAnalysis);
+  $("#printButton").addEventListener("click", () => window.print());
+
   $("#compareButton").addEventListener("click", () => {
     if (state.compareA) { state.compareA = null; state.compareData = null; renderAll(); return; }
     state.compareA = cloneSel(state.sel);
@@ -699,10 +1264,16 @@ function bindEvents() {
     if (state.sel.granularity !== button.dataset.granularity) commit((sel) => { sel.granularity = button.dataset.granularity; });
   }));
 
-  $("#mixChart").addEventListener("click", mixChartClick);
+  document.addEventListener("mousemove", moveChartTooltip);
+  document.addEventListener("mouseout", (event) => {
+    if (event.target.closest?.("canvas") && !event.relatedTarget?.closest?.("canvas")) {
+      $("#chartTooltip").hidden = true;
+    }
+  });
+  document.addEventListener("click", clickChartHit);
 
-  $("#globalSearch").addEventListener("input", (event) => renderSearchResults(event.target.value.trim()));
-  $("#globalSearch").addEventListener("focus", (event) => renderSearchResults(event.target.value.trim()));
+  $("#globalSearch").addEventListener("input", (event) => updateGlobalSearch(event.target.value.trim()));
+  $("#globalSearch").addEventListener("focus", (event) => updateGlobalSearch(event.target.value.trim()));
 
   $$("#towerTableRoot th, #customerTableRoot th").forEach((th) => th.addEventListener("click", () => {
     const table = th.closest("table").id === "towerTableRoot" ? "towers" : "subs";
@@ -720,8 +1291,9 @@ function bindEvents() {
   });
   $$('[data-export="towers"]').forEach((button) => button.addEventListener("click", () => downloadCsv("orange-egypt-towers.csv", state.network?.towers)));
   $$('[data-export="customers"]').forEach((button) => button.addEventListener("click", () => downloadCsv("orange-egypt-subscribers.csv", state.customers?.top_subscribers)));
+  $("#exportCross").addEventListener("click", () => downloadCsv("orange-egypt-cross-analysis.csv", state.cross?.rows));
   $(".export-overview").addEventListener("click", exportSummary);
-  $("#helpButton").addEventListener("click", () => alert("Orange Egypt Telecom Intelligence\n\n• Click any chart element, bar, or legend to select it — every visual responds (associative model).\n• Field tiles open value lists: green = selected, white = possible, grey = excluded.\n• ‹ › arrows step back/forward through selection history.\n• ⇄ Compare pins the current state as A; change selections to build B and read the deltas.\n• ☆ Bookmarks save selection states for one-click recall.\n• Search dimensions from the top bar; sort tables by clicking headers."));
+  $("#helpButton").addEventListener("click", () => alert("Orange Egypt Associative Analytics\n\n• Hover charts for exact values; click marks to filter every dashboard.\n• Use chart toolboxes to zoom, inspect data, reset, and export PNG images.\n• Cross Analysis supports certified measures, four chart types, Top N, and guided drill paths.\n• Field tiles use Qlik-style states: green selected, white possible, grey excluded. Tower and Subscriber search on demand.\n• History arrows step through selection history; Compare creates A/B alternate states.\n• Bookmarks preserve selections, the active sheet, and Cross Analysis setup.\n• Share copies a restorable analysis URL; Print / PDF produces the current sheet.\n• Alerts evaluate KPI thresholds after every refresh and stay private to this browser."));
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { state.openField = null; $("#fieldPopover").hidden = true; $("#bookmarkPanel").hidden = true; $("#searchResults").hidden = true; }
@@ -730,7 +1302,8 @@ function bindEvents() {
   let resizeTimer; window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => state.network && renderAll(), 150); });
 }
 
+restoreSharedState();
 bindEvents();
-setView("overview", false);
+setView(state.view, false);
 loadData();
 setInterval(loadData, 10 * 60 * 1000);

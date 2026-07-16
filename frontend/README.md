@@ -11,7 +11,7 @@ The interface follows the supplied Orange Egypt reference with:
 - a large feature panel with two stacked operational highlights;
 - a horizontal service-style selection rail;
 - responsive KPI, chart, map, quality, and detail-table sections;
-- live date, usage-type, region, plan, and city selections;
+- live date, usage-type, region, plan, city, tower, and subscriber selections;
 - Overview, Network, Customers, and Data Quality views;
 - CSV export, fullscreen, language-direction toggle, and ten-minute refresh.
 
@@ -29,12 +29,26 @@ model inspired by Qlik Sense:
   plus Clear-all. The `‹ ›` rail arrows step **back/forward through selection
   history** (up to 60 steps).
 - **Bookmarks** — save/apply/delete named selection states (localStorage).
+  Bookmarks include the active sheet and Cross Analysis configuration.
 - **Compare mode (alternate states)** — `⇄ Compare` pins the current
   selection as **state A**; keep selecting to form **state B**. A strip shows
   both states side by side with per-KPI deltas, and the traffic chart overlays
   state A as a dashed line.
 - **Smart search** — the top-bar search matches values across all dimensions
   ("cai" → City Cairo · 14.2K events); click a hit to toggle it.
+- **Cross Analysis** — combine any governed dimension and certified measure,
+  choose Top N and grouped/stacked/line/pie output, inspect the underlying
+  table, and export CSV.
+- **Guided drill-down** — Network Geography (`Region → Tower`), Customer
+  Segmentation (`Plan → City → Subscriber`), and Service to Network
+  (`Usage type → Region → Tower`) paths retain the associative selection state.
+- **Advanced visual interaction** — Apache ECharts provides hover tooltips,
+  selection events, inside/slider zoom, data view, reset, PNG export, responsive
+  rendering, and generated ARIA descriptions.
+- **Share and reporting** — Share copies a URL that restores the sheet,
+  selections, chart type and drill level; Print / PDF uses a report stylesheet.
+- **Local alerts** — user-defined KPI thresholds are evaluated on refresh and
+  stored privately in the browser.
 - **Traffic heatmap** — weekday × UTC-hour intensity matrix (7 × 24 cells).
 - **Granularity switch** — hour/day toggle on the traffic trend.
 - **Tables** — click headers to sort, per-table search boxes, CSV export.
@@ -46,6 +60,10 @@ model inspired by Qlik Sense:
 | `/api/network` | KPIs, trend (`granularity=hour\|day`), heatmap, regions, mix, towers, quarantine |
 | `/api/customers` | Subscriber KPIs, plans, cities, weekday split, top subscribers |
 | `/api/filters` | Associative panel: per-field values with counts under the rest of the selection |
+| `/api/values` | On-demand search for high-cardinality tower/subscriber values |
+| `/api/cross` | Governed one/two-dimension cross-analysis query |
+| `/api/catalog` | Certified measures, dimensions, drill paths, and engine capabilities |
+| `/api/system` | Cache and connection-pool diagnostics |
 
 All filter params accept comma-separated multi-values (e.g.
 `region=North,South`). Rapid successive selections are raced safely — only
@@ -57,3 +75,16 @@ Start the full stack with `docker compose up -d --build`, then open:
 
 The API validates all filter values and uses parameterized SQL. It does not
 expose database credentials to the browser.
+
+## Performance and free dependencies
+
+- Postgres connections are reused through a bounded `psycopg_pool` pool
+  (1–8 connections).
+- Identical analytical requests use a bounded in-process TTL/LRU cache.
+  Configure it with `FRONTEND_CACHE_TTL` and `FRONTEND_CACHE_MAX`.
+- JSON payloads larger than 1 KB are gzip-compressed when supported.
+- API responses expose `X-Analytics-Cache` and `Server-Timing` headers.
+- Hidden dashboard sheets are not rendered, reducing browser work.
+- Apache ECharts 6.1 is vendored under `static/vendor/` for offline use and is
+  available under the Apache License 2.0. No commercial frontend dependency is
+  required.
