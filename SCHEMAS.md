@@ -49,8 +49,8 @@ drop them silently.
 ## 2. Data-lake path conventions (MinIO, bucket `telecom-lake`)
 
 ```
-raw/usage_logs/date=YYYY-MM-DD/hour=HH/part-*.json.gz
-quarantine/usage_logs/date=YYYY-MM-DD/hour=HH/
+raw/usage_logs/date=YYYY-MM-DD/hour=HH/minute=MM/part-*.json.gz
+quarantine/usage_logs/date=YYYY-MM-DD/hour=HH/minute=MM/
 ```
 
 `date`/`hour` are the **UTC event hour**, not the load time.
@@ -127,14 +127,14 @@ dwh.etl_hourly_metrics (
 
 ## 4. Idempotency contract (D6)
 
-For each DAG run covering hour `H`:
+For each DAG run covering ten-minute interval `[T, T + 10 minutes)`:
 
 ```sql
 DELETE FROM dwh.fact_usage_events
-WHERE event_ts >= 'H' AND event_ts < 'H + 1 hour';
+WHERE event_ts >= 'T' AND event_ts < 'T + 10 minutes';
 ```
 
-…then insert the freshly transformed rows. A rerun of any hour must produce
+…then insert the freshly transformed rows. A rerun of any interval must produce
 zero duplicate rows.
 
 ---
@@ -145,5 +145,5 @@ zero duplicate rows.
 |-----------|-------|
 | MinIO bucket | `telecom-lake` |
 | Postgres DB / schema | `telecom_dwh` / `dwh` |
-| DAG id | `hourly_usage_etl` (`@hourly`, catchup=True, max_active_runs=1) |
+| DAG id | `ten_minute_usage_etl` (`*/10 * * * *`, catchup=False, max_active_runs=1) |
 | Ports | MinIO 9000/9001 · Airflow 8080 · Postgres 5432 · Metabase 3000 · Spark UI 4040 |

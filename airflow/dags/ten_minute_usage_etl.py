@@ -1,9 +1,9 @@
-"""hourly_usage_etl — orchestrates the Phase 2 PySpark job for one UTC hour.
+"""ten_minute_usage_etl — generate and process one ten-minute UTC interval.
 
-wait_for_raw_files (sensor) -> run_usage_etl (spark-submit) -> data_quality_checks
+generate_usage_logs -> wait_for_raw_files -> run_usage_etl -> data_quality_checks
 
 Contracts: SCHEMAS.md (paths, idempotency) and etl/README.md (ETL CLI).
-The hour processed is the DAG run's data_interval_start (UTC).
+The interval processed is the DAG run's data_interval_start (UTC).
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ from __future__ import annotations
 import gzip
 import io
 import os
+import sys
+import tempfile
 from datetime import timedelta
 
 import pendulum
@@ -22,6 +24,7 @@ from airflow.sensors.python import PythonSensor
 BUCKET = os.getenv("MINIO_BUCKET", "telecom-lake")
 MAX_QUARANTINE_RATE = 0.05
 SPARK_PACKAGES = "org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.7.3"
+INTERVAL_MINUTES = 10
 
 
 def _s3():
@@ -38,9 +41,9 @@ def _s3():
     )
 
 
-def _hour_prefix(root: str, hour: pendulum.DateTime) -> str:
-    return (f"{root}/usage_logs/date={hour.strftime('%Y-%m-%d')}/"
-            f"hour={hour.strftime('%H')}/")
+def _interval_prefix(root: str, start: pendulum.DateTime) -> str:
+    return (f"{root}/usage_logs/date={start.strftime('%Y-%m-%d')}/"
+            f"hour={start.strftime('%H')}/minute={start.strftime('%M')}/")
 
 
 def _count_gzip_lines(s3, prefix: str) -> int:
@@ -56,8 +59,29 @@ def _count_gzip_lines(s3, prefix: str) -> int:
     return total
 
 
+def generate_usage_logs(data_interval_start: pendulum.DateTime, **_) -> None:
+    """Generate and idempotently upload this DAG run's ten-minute batch."""
+    sys.path.insert(0, "/opt/airflow/generator")
+    from generate import generate_interval, write_interval_file
+    from upload import upload_file
+
+    events = int(os.getenv("GEN_EVENTS_PER_10_MINUTES", "1667"))
+    malformed_rate = float(os.getenv("GEN_MALFORMED_RATE", "0.02"))
+    subscribers = int(os.getenv("GEN_NUM_SUBSCRIBERS", "5000"))
+    towers = int(os.getenv("GEN_NUM_TOWERS", "200"))
+    start = data_interval_start.in_timezone("UTC")
+
+    lines = generate_interval(
+        start, INTERVAL_MINUTES, events, malformed_rate, subscribers, towers
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_interval_file(start, lines, tmp)
+        uri = upload_file(path, start, BUCKET)
+    print(f"generated {len(lines)} events for {start.isoformat()} -> {uri}")
+
+
 def raw_files_present(data_interval_start: pendulum.DateTime, **_) -> bool:
-    prefix = _hour_prefix("raw", data_interval_start)
+    prefix = _interval_prefix("raw", data_interval_start)
     resp = _s3().list_objects_v2(Bucket=BUCKET, Prefix=prefix, MaxKeys=1)
     found = resp.get("KeyCount", 0) > 0
     print(f"sensor: s3://{BUCKET}/{prefix} -> {'found' if found else 'missing'}")
@@ -65,15 +89,15 @@ def raw_files_present(data_interval_start: pendulum.DateTime, **_) -> bool:
 
 
 def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
-    """Fail the run if: fact hour is empty, any FK is null, or quarantine >= 5%.
+    """Fail if the interval is empty, has null FKs, or quarantine is >= 5%.
 
-    On success, upserts the hour's metrics into dwh.etl_hourly_metrics
+    On success, upserts interval metrics into dwh.etl_hourly_metrics
     (additive ops table, see SCHEMAS.md) for the quarantine-rate dashboard.
     """
     import psycopg2
 
     start = data_interval_start
-    end = start.add(hours=1)
+    end = start.add(minutes=INTERVAL_MINUTES)
     conn = psycopg2.connect(
         host=os.environ["DWH_POSTGRES_HOST"],
         port=os.environ.get("DWH_POSTGRES_PORT", "5432"),
@@ -95,13 +119,13 @@ def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
             fact_rows, null_fks = cur.fetchone()
 
         if fact_rows == 0:
-            raise ValueError(f"DQ fail: 0 fact rows for hour {start.isoformat()}")
+            raise ValueError(f"DQ fail: 0 fact rows for interval {start.isoformat()}")
         if null_fks:
             raise ValueError(f"DQ fail: {null_fks} fact rows with null dimension keys")
 
         s3 = _s3()
-        raw_rows = _count_gzip_lines(s3, _hour_prefix("raw", start))
-        quarantine_rows = _count_gzip_lines(s3, _hour_prefix("quarantine", start))
+        raw_rows = _count_gzip_lines(s3, _interval_prefix("raw", start))
+        quarantine_rows = _count_gzip_lines(s3, _interval_prefix("quarantine", start))
         rate = quarantine_rows / raw_rows if raw_rows else 1.0
         if rate >= MAX_QUARANTINE_RATE:
             raise ValueError(
@@ -132,32 +156,38 @@ def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
 default_args = {
     "owner": "dev-a",
     "retries": 2,
-    "retry_delay": timedelta(minutes=2),
+    "retry_delay": timedelta(minutes=1),
     "retry_exponential_backoff": True,
-    "max_retry_delay": timedelta(minutes=20),
+    "max_retry_delay": timedelta(minutes=5),
     # Email stub: flips on once SMTP is configured in the environment (Phase 4+).
     "email": ["alerts@example.com"],
     "email_on_failure": True,
 }
 
 with DAG(
-    dag_id="hourly_usage_etl",
-    description="Hourly telecom usage ETL: MinIO raw -> Spark -> Postgres DWH",
-    schedule="@hourly",
-    start_date=pendulum.datetime(2026, 7, 12, 7, tz="UTC"),  # first backfilled hour
-    catchup=True,
+    dag_id="ten_minute_usage_etl",
+    description="Every 10 minutes: generate -> MinIO -> Spark -> Postgres DWH",
+    schedule="*/10 * * * *",
+    start_date=pendulum.datetime(2026, 7, 17, 0, 0, tz="UTC"),
+    catchup=False,
+    is_paused_upon_creation=False,
     max_active_runs=1,
-    dagrun_timeout=timedelta(hours=1),
+    dagrun_timeout=timedelta(minutes=30),
     default_args=default_args,
     tags=["telecom", "etl"],
 ) as dag:
+
+    generate_batch = PythonOperator(
+        task_id="generate_usage_logs",
+        python_callable=generate_usage_logs,
+    )
 
     wait_for_raw_files = PythonSensor(
         task_id="wait_for_raw_files",
         python_callable=raw_files_present,
         mode="reschedule",
-        poke_interval=60,
-        timeout=60 * 30,
+        poke_interval=15,
+        timeout=60 * 5,
     )
 
     run_usage_etl = SparkSubmitOperator(
@@ -166,8 +196,8 @@ with DAG(
         conn_id="spark_local",
         packages=SPARK_PACKAGES,
         application_args=[
-            "--run-hour",
-            "{{ data_interval_start.strftime('%Y-%m-%dT%H:00:00Z') }}",
+            "--run-start",
+            "{{ data_interval_start.strftime('%Y-%m-%dT%H:%M:00Z') }}",
         ],
         conf={"spark.ui.enabled": "false"},
         verbose=False,
@@ -178,4 +208,4 @@ with DAG(
         python_callable=data_quality_checks,
     )
 
-    wait_for_raw_files >> run_usage_etl >> dq_checks
+    generate_batch >> wait_for_raw_files >> run_usage_etl >> dq_checks

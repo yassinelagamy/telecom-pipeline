@@ -1,7 +1,7 @@
-# Phase 2: hourly PySpark ETL
+# Phase 2: ten-minute PySpark ETL
 
 `usage_etl.py` processes exactly one UTC hour. It reads gzip NDJSON from the
-frozen raw path, overwrites that hour's quarantine output, resolves warehouse
+ten-minute raw path, overwrites that interval's quarantine output, resolves warehouse
 dimension keys, then deletes and reloads the corresponding fact partition.
 
 The Spark 3.5 submission needs the S3A and Postgres JDBC connectors. The Hadoop
@@ -11,7 +11,7 @@ Spark 3.5.0's standard Hadoop 3 distribution uses the following coordinates:
 ```bash
 spark-submit \
   --packages org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.7.3 \
-  etl/usage_etl.py --run-hour 2026-07-14T09:00:00Z
+  etl/usage_etl.py --run-start 2026-07-14T09:20:00Z
 ```
 
 Runtime configuration is read from the existing `.env` names:
@@ -43,7 +43,7 @@ docker compose -f docker-compose.yml \
 
 docker compose -f docker-compose.yml \
   -f etl/tests/integration/docker-compose.yml run --rm spark-etl \
-  --run-hour 2026-07-14T09:00:00Z
+  --run-start 2026-07-14T09:20:00Z
 ```
 
 Run the second command again for the idempotency check. `inserted_fact_rows`
@@ -54,5 +54,5 @@ Against the production Compose warehouse, use the runner-only overlay:
 ```bash
 docker compose -f docker-compose.yml \
   -f etl/docker-compose.runner.yml run --rm spark-etl \
-  --run-hour 2026-07-14T09:00:00Z
+  --run-start 2026-07-14T09:20:00Z
 ```

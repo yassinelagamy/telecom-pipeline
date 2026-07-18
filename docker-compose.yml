@@ -27,6 +27,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
       postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/${AIRFLOW_DB_NAME}
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    AIRFLOW__WEBSERVER__WORKERS: "1"
+    AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "600"
     # spark-submit runs local[*] inside the container (D4)
     AIRFLOW_CONN_SPARK_LOCAL: '{"conn_type": "spark", "host": "local[*]"}'
     # available to DAG tasks + the ETL child process
@@ -39,10 +41,15 @@ x-airflow-common: &airflow-common
     DWH_POSTGRES_DB: ${DWH_POSTGRES_DB}
     DWH_POSTGRES_USER: ${DWH_POSTGRES_USER}
     DWH_POSTGRES_PASSWORD: ${DWH_POSTGRES_PASSWORD}
+    GEN_EVENTS_PER_10_MINUTES: ${GEN_EVENTS_PER_10_MINUTES:-1667}
+    GEN_MALFORMED_RATE: ${GEN_MALFORMED_RATE:-0.02}
+    GEN_NUM_SUBSCRIBERS: ${GEN_NUM_SUBSCRIBERS:-5000}
+    GEN_NUM_TOWERS: ${GEN_NUM_TOWERS:-200}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./etl:/opt/airflow/etl
+    - ./generator:/opt/airflow/generator:ro
     - spark-ivy-cache:/home/airflow/.ivy2
   user: "${AIRFLOW_UID:-50000}:0"
   networks: [telecom-net]
@@ -102,6 +109,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET}
       GEN_EVENTS_PER_HOUR: ${GEN_EVENTS_PER_HOUR}
+      GEN_EVENTS_PER_10_MINUTES: ${GEN_EVENTS_PER_10_MINUTES:-1667}
       GEN_MALFORMED_RATE: ${GEN_MALFORMED_RATE}
       GEN_NUM_SUBSCRIBERS: ${GEN_NUM_SUBSCRIBERS}
       GEN_NUM_TOWERS: ${GEN_NUM_TOWERS}

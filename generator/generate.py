@@ -1,14 +1,14 @@
 """Telecom usage log generator.
 
-Produces one UTC hour of NDJSON usage events (gzip) following the frozen
+Produces one UTC interval of NDJSON usage events (gzip) following the data
 contract in SCHEMAS.md. ~2% of rows are intentionally malformed to exercise
 the ETL quarantine path (D7).
 
-Deterministic per hour: the RNG is seeded from the hour string, so re-running
-the same hour reproduces identical data (nice for idempotency testing, D6).
+Deterministic per interval: the RNG is seeded from the interval start, so a
+rerun reproduces identical data (useful for idempotency testing, D6).
 
 Usage:
-    python generate.py --hour 2026-07-14T09 [--events 10000] [--out DIR]
+    python generate.py --start 2026-07-14T09:20 [--minutes 10] [--events 1667]
 """
 
 import argparse
@@ -29,9 +29,15 @@ DIURNAL = [0.30, 0.25, 0.22, 0.20, 0.22, 0.30, 0.45, 0.65,
            1.05, 1.15, 1.30, 1.35, 1.25, 1.00, 0.70, 0.45]
 
 
-def parse_hour(s: str) -> datetime:
-    dt = datetime.strptime(s, "%Y-%m-%dT%H")
+def parse_interval_start(s: str) -> datetime:
+    try:
+        dt = datetime.strptime(s, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        dt = datetime.strptime(s, "%Y-%m-%dT%H")
     return dt.replace(tzinfo=timezone.utc)
+
+
+parse_hour = parse_interval_start
 
 
 def subscriber_pool(n: int):
@@ -47,9 +53,10 @@ def tower_pool(n: int):
     return ids, weights
 
 
-def make_event(rng: random.Random, ts_start: datetime, subs, towers) -> dict:
+def make_event(rng: random.Random, ts_start: datetime, duration_seconds: int,
+               subs, towers) -> dict:
     event_type = rng.choices(EVENT_TYPES, weights=EVENT_WEIGHTS, k=1)[0]
-    ts = ts_start + timedelta(seconds=rng.uniform(0, 3600))
+    ts = ts_start + timedelta(seconds=rng.uniform(0, duration_seconds))
     ev = {
         "event_id": str(uuid.UUID(int=rng.getrandbits(128), version=4)),
         "subscriber_id": rng.choices(subs[0], weights=subs[1], k=1)[0],
@@ -95,15 +102,16 @@ def corrupt(rng: random.Random, ev: dict) -> str:
     return json.dumps(bad)
 
 
-def generate_hour(hour: datetime, events: int, malformed_rate: float,
-                  n_subs: int, n_towers: int) -> list[str]:
-    seed = zlib.crc32(hour.strftime("%Y-%m-%dT%H").encode())
+def generate_interval(start: datetime, minutes: int, events: int,
+                      malformed_rate: float, n_subs: int,
+                      n_towers: int) -> list[str]:
+    seed = zlib.crc32(start.strftime("%Y-%m-%dT%H:%M").encode())
     rng = random.Random(seed)
     subs, towers = subscriber_pool(n_subs), tower_pool(n_towers)
-    n = max(1, int(events * DIURNAL[hour.hour]))
+    n = max(1, int(events * DIURNAL[start.hour]))
     lines = []
     for _ in range(n):
-        ev = make_event(rng, hour, subs, towers)
+        ev = make_event(rng, start, minutes * 60, subs, towers)
         if rng.random() < malformed_rate:
             lines.append(corrupt(rng, ev))
         else:
@@ -111,21 +119,31 @@ def generate_hour(hour: datetime, events: int, malformed_rate: float,
     return lines
 
 
-def write_hour_file(hour: datetime, lines: list[str], out_dir: str) -> str:
+def generate_hour(hour: datetime, events: int, malformed_rate: float,
+                  n_subs: int, n_towers: int) -> list[str]:
+    return generate_interval(hour, 60, events, malformed_rate, n_subs, n_towers)
+
+
+def write_interval_file(start: datetime, lines: list[str], out_dir: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"part-{hour.strftime('%Y%m%d%H')}-0000.json.gz")
+    path = os.path.join(out_dir, f"part-{start.strftime('%Y%m%d%H%M')}-0000.json.gz")
     with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f:
         for line in lines:
             f.write(line + "\n")
     return path
 
 
+write_hour_file = write_interval_file
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--hour", required=True, help="UTC hour, e.g. 2026-07-14T09")
+    p.add_argument("--start", help="UTC interval start, e.g. 2026-07-14T09:20")
+    p.add_argument("--hour", help=argparse.SUPPRESS)
+    p.add_argument("--minutes", type=int, default=10)
     p.add_argument("--events", type=int,
-                   default=int(os.getenv("GEN_EVENTS_PER_HOUR", "10000")),
-                   help="baseline events/hour before diurnal scaling")
+                   default=int(os.getenv("GEN_EVENTS_PER_10_MINUTES", "1667")),
+                   help="baseline events per interval before diurnal scaling")
     p.add_argument("--malformed-rate", type=float,
                    default=float(os.getenv("GEN_MALFORMED_RATE", "0.02")))
     p.add_argument("--subscribers", type=int,
@@ -135,10 +153,13 @@ def main():
     p.add_argument("--out", default="./data", help="local output directory")
     args = p.parse_args()
 
-    hour = parse_hour(args.hour)
-    lines = generate_hour(hour, args.events, args.malformed_rate,
-                          args.subscribers, args.towers)
-    path = write_hour_file(hour, lines, args.out)
+    start_arg = args.start or args.hour
+    if not start_arg:
+        p.error("--start is required")
+    start = parse_interval_start(start_arg)
+    lines = generate_interval(start, args.minutes, args.events,
+                              args.malformed_rate, args.subscribers, args.towers)
+    path = write_interval_file(start, lines, args.out)
     print(f"wrote {len(lines)} events -> {path}")
 
 

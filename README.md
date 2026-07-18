@@ -1,19 +1,19 @@
 # Telecom Usage Data Pipeline
 
-End-to-end batch data pipeline simulating a real-world telecom analytics platform: **log generation → data lake (MinIO) → hourly PySpark ETL (Airflow-orchestrated) → star-schema Postgres warehouse → Orange Egypt analytics frontend + Metabase**.
+End-to-end telecom analytics pipeline: **10-minute event generation → MinIO data lake → Airflow-orchestrated PySpark ETL → star-schema Postgres warehouse → Orange Egypt analytics frontend + Metabase**.
 
 ```
 Log Generator ──> MinIO (raw)  ──> PySpark ETL ──> Postgres DWH ──> Metabase
                        ▲                │
-                       └── Airflow (hourly DAG) ──┘
+                       └── Airflow (every 10 minutes) ──┘
 ```
 
 ## Architecture
 
 | Layer | Tech | Purpose |
 |-------|------|---------|
-| **Data Lake** | MinIO (S3-compatible) | Raw NDJSON logs partitioned by UTC hour |
-| **Orchestration** | Airflow 2.9.3 | Hourly DAG managing ETL runs + quality gates |
+| **Data Lake** | MinIO (S3-compatible) | Raw NDJSON logs partitioned into UTC 10-minute windows |
+| **Orchestration** | Airflow 2.9.3 | 10-minute generation, ETL runs, and quality gates |
 | **Transform** | PySpark 3.5.1 | Validates raw logs → quarantines malformed → joins dims → loads facts |
 | **Warehouse** | Postgres 16 | 3-dim star schema + operational metrics table |
 | **Analytics** | Orange frontend + Metabase 0.62.4 | Branded operations interface plus analyst authoring |
@@ -43,34 +43,30 @@ Data is seeded on startup:
 - **Postgres:** 5,000 subscribers, 200 towers, ~1,100 dates; idempotent DDL
 - **Metabase:** pre-provisioned dashboards querying live warehouse data
 
-## Backfill & daily operation
+## Live 10-minute operation
 
-To pre-populate the warehouse with historical data, the hourly DAG has `catchup=True` — unpause it in Airflow:
+Airflow runs `ten_minute_usage_etl` every 10 minutes. Each run generates a
+new batch of voice, SMS, and data events, uploads it to MinIO, validates and
+quarantines records with PySpark, loads PostgreSQL, and records data-quality
+metrics. The DAG uses `catchup=False`, so it starts with the next live interval.
 
 ```bash
-docker compose exec airflow-scheduler airflow dags unpause hourly_usage_etl
+docker compose exec airflow-scheduler airflow dags unpause ten_minute_usage_etl
+docker compose exec airflow-scheduler airflow dags list-runs -d ten_minute_usage_etl
 ```
 
-The DAG will immediately start processing all queued data-interval-start timestamps (oldest to newest). Each run:
+The task flow is `generate_usage_logs -> wait_for_raw_files -> run_usage_etl
+-> data_quality_checks`. Raw and quarantine paths use
+`date=YYYY-MM-DD/hour=HH/minute=MM` partitions. Rerunning an interval replaces
+only that interval, so no duplicate facts are produced.
 
-1. **wait_for_raw_files** (PythonSensor): Polls MinIO for the hour's raw logs
-2. **run_usage_etl** (SparkSubmitOperator): Reads gzip NDJSON → validates → quarantines bad rows → joins dimension keys → deletes + reloads the hour's fact partition
-3. **data_quality_checks** (PythonOperator): Verifies fact rows > 0, zero null foreign keys, quarantine rate < 5%; upserts metrics to `dwh.etl_hourly_metrics`
+## Legacy hourly backfill
 
-Each hour is **idempotent** (delete-then-insert): re-running an hour produces zero duplicates.
-
-To backfill a fresh setup from scratch:
+The standalone generator can still create historical hour-sized files when
+needed. Live processing is handled only by `ten_minute_usage_etl`.
 
 ```bash
-# Generate and upload raw logs (done automatically on `docker compose up`)
 docker compose run --rm generator backfill.py --hours 48
-
-# Unpause the DAG for automatic catchup
-docker compose exec airflow-scheduler airflow dags unpause hourly_usage_etl
-
-# Monitor progress
-watch 'docker compose exec -T airflow-scheduler airflow dags list-runs \
-  -d hourly_usage_etl -o plain | grep -c success'
 ```
 
 ## Data contracts (frozen)
@@ -90,7 +86,7 @@ One JSON object per line, UTC timestamps, ~2% intentionally malformed rows. See 
 | `event_ts` | ISO-8601 UTC | Always UTC |
 | `duration_sec` / `sms_count` / `bytes_up,down` | metric | One per event type, rest null |
 
-Raw logs land in `raw/usage_logs/date=YYYY-MM-DD/hour=HH/part-*.json.gz`; malformed rows go to `quarantine/usage_logs/...` for auditability.
+Raw logs land in `raw/usage_logs/date=YYYY-MM-DD/hour=HH/minute=MM/part-*.json.gz`; malformed rows go to the matching `quarantine/usage_logs/...` partition for auditability.
 
 ### 2. Warehouse schema (star, idempotent)
 
@@ -116,7 +112,7 @@ DELETE FROM dwh.fact_usage_events WHERE event_ts >= :hour AND event_ts < :hour+1
 INSERT INTO dwh.fact_usage_events (...) SELECT * FROM validated_data;
 ```
 
-Re-running the same hour produces zero duplicates. Testing: [etl/tests/](etl/tests/).
+Re-running the same 10-minute interval produces zero duplicates. Testing: [etl/tests/](etl/tests/).
 
 ## Dashboards & analytics
 
@@ -167,7 +163,7 @@ telecom-pipeline/
 ├── airflow/                  # Dev A — orchestration & DAG
 │   ├── Dockerfile            # Airflow 2.9.3 + Java 17 + Spark 3.5.1
 │   ├── dags/
-│   │   └── hourly_usage_etl.py # Main DAG: sensor → spark-submit → DQ checks
+│   │   └── ten_minute_usage_etl.py # Generate → sensor → Spark → DQ checks
 │   └── logs/                 # Generated at runtime
 │
 ├── dwh/                      # Dev B — warehouse + seeds
@@ -210,7 +206,7 @@ docker compose exec minio mc cat local/telecom-lake/raw/usage_logs/date=2026-07-
 docker compose exec postgres-dwh psql -U dwh_user -d telecom_dwh -c "SELECT count(*) FROM dwh.fact_usage_events"
 
 # Check Airflow DAG status
-docker compose exec airflow-scheduler airflow dags list-runs -d hourly_usage_etl -o plain
+docker compose exec airflow-scheduler airflow dags list-runs -d ten_minute_usage_etl -o plain
 ```
 
 ## Troubleshooting
@@ -220,7 +216,7 @@ docker compose exec airflow-scheduler airflow dags list-runs -d hourly_usage_etl
 Ensure the DAG is unpaused and the scheduler is running:
 
 ```bash
-docker compose exec airflow-scheduler airflow dags unpause hourly_usage_etl
+docker compose exec airflow-scheduler airflow dags unpause ten_minute_usage_etl
 docker compose logs airflow-scheduler | grep -i error
 ```
 

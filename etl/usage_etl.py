@@ -1,8 +1,8 @@
-"""Hourly telecom usage ETL.
+"""Ten-minute telecom usage ETL.
 
-Reads one UTC hour of gzip NDJSON from MinIO, quarantines rows that violate
+Reads one UTC interval of gzip NDJSON from MinIO, quarantines rows that violate
 the frozen raw contract, resolves warehouse dimension keys, and replaces the
-same hour in Postgres.  The job is designed to be called by Airflow's
+same interval in Postgres. The job is designed to be called by Airflow's
 SparkSubmitOperator, but can also be run manually with spark-submit.
 """
 
@@ -87,26 +87,34 @@ def _required_env(name: str) -> str:
     return value
 
 
-def parse_run_hour(value: str) -> datetime:
-    """Parse an aware UTC timestamp aligned to the start of an hour."""
+INTERVAL_MINUTES = 10
+
+
+def parse_run_start(value: str) -> datetime:
+    """Parse an aware UTC timestamp aligned to a ten-minute boundary."""
     normalized = value.strip().replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            "run hour must be an ISO-8601 timestamp, e.g. 2026-07-14T09:00:00Z"
+            "run start must be ISO-8601, e.g. 2026-07-14T09:20:00Z"
         ) from exc
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
-        raise argparse.ArgumentTypeError("run hour must explicitly use UTC")
+        raise argparse.ArgumentTypeError("run start must explicitly use UTC")
     parsed = parsed.astimezone(UTC)
-    if parsed.minute or parsed.second or parsed.microsecond:
-        raise argparse.ArgumentTypeError("run hour must be aligned to HH:00:00 UTC")
+    if parsed.minute % INTERVAL_MINUTES or parsed.second or parsed.microsecond:
+        raise argparse.ArgumentTypeError(
+            "run start must align to a 10-minute UTC boundary"
+        )
     return parsed
+
+
+parse_run_hour = parse_run_start
 
 
 def build_spark(settings: Settings) -> SparkSession:
     spark = (
-        SparkSession.builder.appName("telecom-hourly-usage-etl")
+        SparkSession.builder.appName("telecom-ten-minute-usage-etl")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.hadoop.fs.s3a.endpoint", settings.minio_endpoint)
         .config("spark.hadoop.fs.s3a.access.key", settings.minio_access_key)
@@ -124,15 +132,20 @@ def build_spark(settings: Settings) -> SparkSession:
     return spark
 
 
-def hour_paths(bucket: str, run_hour: datetime) -> tuple[str, str]:
-    partition = f"date={run_hour:%Y-%m-%d}/hour={run_hour:%H}"
+def interval_paths(bucket: str, run_start: datetime) -> tuple[str, str]:
+    partition = (
+        f"date={run_start:%Y-%m-%d}/hour={run_start:%H}/minute={run_start:%M}"
+    )
     raw = f"s3a://{bucket}/raw/usage_logs/{partition}/part-*.json.gz"
     quarantine = f"s3a://{bucket}/quarantine/usage_logs/{partition}/"
     return raw, quarantine
 
 
+hour_paths = interval_paths
+
+
 def validate_records(
-    raw_lines: DataFrame, run_hour: datetime
+    raw_lines: DataFrame, run_start: datetime
 ) -> tuple[DataFrame, DataFrame]:
     """Return (valid records, quarantine records) for an hour of raw lines."""
     parsed = F.from_json(
@@ -206,11 +219,13 @@ def validate_records(
         | ((F.col("event_type") == "data") & data_metrics_valid)
     )
 
-    hour_start = run_hour.strftime("%Y-%m-%dT%H:%M:%SZ")
-    hour_end = (run_hour + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    timestamp_outside_hour = F.col("parsed_event_ts").isNotNull() & ~(
-        (F.col("parsed_event_ts") >= F.to_timestamp(F.lit(hour_start), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
-        & (F.col("parsed_event_ts") < F.to_timestamp(F.lit(hour_end), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
+    interval_start = run_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    interval_end = (run_start + timedelta(minutes=INTERVAL_MINUTES)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    timestamp_outside_interval = F.col("parsed_event_ts").isNotNull() & ~(
+        (F.col("parsed_event_ts") >= F.to_timestamp(F.lit(interval_start), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
+        & (F.col("parsed_event_ts") < F.to_timestamp(F.lit(interval_end), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
     )
 
     reason_candidates = F.array(
@@ -230,7 +245,7 @@ def validate_records(
             "invalid_event_type",
         ),
         F.when(F.col("parsed_event_ts").isNull(), "invalid_event_ts"),
-        F.when(timestamp_outside_hour, "event_ts_outside_run_hour"),
+        F.when(timestamp_outside_interval, "event_ts_outside_run_interval"),
         F.when(~F.coalesce(metrics_valid, F.lit(False)), "invalid_event_metrics"),
     )
     rows = rows.withColumn(
@@ -240,7 +255,7 @@ def validate_records(
     quarantine = rows.where(F.size("invalid_reasons") > 0).select(
         "raw_record",
         "invalid_reasons",
-        F.lit(hour_start).alias("run_hour_utc"),
+        F.lit(interval_start).alias("run_start_utc"),
         F.current_timestamp().alias("quarantine_ts"),
     )
     valid = rows.where(F.size("invalid_reasons") == 0).select(
@@ -327,8 +342,8 @@ def resolve_dimension_keys(
     )
 
 
-def delete_hour(spark: SparkSession, settings: Settings, run_hour: datetime) -> int:
-    """Delete the target fact partition through Spark's loaded JDBC driver."""
+def delete_interval(spark: SparkSession, settings: Settings, run_start: datetime) -> int:
+    """Delete the target interval through Spark's loaded JDBC driver."""
     jvm = spark.sparkContext._gateway.jvm
     properties = jvm.java.util.Properties()
     properties.setProperty("user", settings.jdbc_user)
@@ -351,9 +366,9 @@ def delete_hour(spark: SparkSession, settings: Settings, run_hour: datetime) -> 
             "AND event_ts < CAST(? AS timestamptz)"
         )
         statement = connection.prepareStatement(sql)
-        statement.setString(1, run_hour.isoformat().replace("+00:00", "Z"))
+        statement.setString(1, run_start.isoformat().replace("+00:00", "Z"))
         statement.setString(
-            2, (run_hour + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+            2, (run_start + timedelta(minutes=INTERVAL_MINUTES)).isoformat().replace("+00:00", "Z")
         )
         deleted = statement.executeUpdate()
         connection.commit()
@@ -367,6 +382,9 @@ def delete_hour(spark: SparkSession, settings: Settings, run_hour: datetime) -> 
         connection.close()
 
 
+delete_hour = delete_interval
+
+
 def write_fact(fact: DataFrame, settings: Settings) -> None:
     (
         fact.coalesce(settings.output_partitions)
@@ -377,22 +395,22 @@ def write_fact(fact: DataFrame, settings: Settings) -> None:
     )
 
 
-def run(run_hour: datetime, settings: Settings) -> dict[str, object]:
+def run(run_start: datetime, settings: Settings) -> dict[str, object]:
     spark = build_spark(settings)
-    raw_path, quarantine_path = hour_paths(settings.minio_bucket, run_hour)
+    raw_path, quarantine_path = interval_paths(settings.minio_bucket, run_start)
     try:
         raw_lines = spark.read.text(raw_path).select(F.col("value").alias("raw_record")).cache()
         total_rows = raw_lines.count()
         if total_rows == 0:
             raise RuntimeError(f"No raw usage records found at {raw_path}")
 
-        valid, quarantine = validate_records(raw_lines, run_hour)
+        valid, quarantine = validate_records(raw_lines, run_start)
         valid = valid.cache()
         quarantine = quarantine.cache()
         valid_rows = valid.count()
         quarantine_rows = quarantine.count()
 
-        # Overwrite makes quarantine deterministic on reruns of the same hour.
+        # Overwrite makes quarantine deterministic on interval reruns.
         (
             quarantine.write.mode("overwrite")
             .option("compression", "gzip")
@@ -401,11 +419,11 @@ def run(run_hour: datetime, settings: Settings) -> dict[str, object]:
 
         fact = resolve_dimension_keys(spark, valid, settings).cache()
         fact_rows = fact.count()
-        deleted_rows = delete_hour(spark, settings, run_hour)
+        deleted_rows = delete_interval(spark, settings, run_start)
         write_fact(fact, settings)
 
         metrics = {
-            "run_hour_utc": run_hour.isoformat().replace("+00:00", "Z"),
+            "run_start_utc": run_start.isoformat().replace("+00:00", "Z"),
             "raw_rows": total_rows,
             "valid_rows": valid_rows,
             "quarantine_rows": quarantine_rows,
@@ -424,17 +442,17 @@ def run(run_hour: datetime, settings: Settings) -> dict[str, object]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--run-hour",
+        "--run-start",
         required=True,
-        type=parse_run_hour,
-        help="UTC hour to process, e.g. 2026-07-14T09:00:00Z",
+        type=parse_run_start,
+        help="UTC interval start, e.g. 2026-07-14T09:20:00Z",
     )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    run(args.run_hour, Settings.from_env())
+    run(args.run_start, Settings.from_env())
     return 0
 
 
