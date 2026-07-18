@@ -112,12 +112,12 @@ Seed volumes: **5,000 subscribers**, **200 towers**,
 ### Additive operational table (agreed Dev A + Dev B, 2026-07-14)
 
 Not part of the analytical star schema; written by the DAG's data-quality
-task each run (upsert on `run_hour`, so reruns stay idempotent). Feeds the
+task each run (upsert on `run_start`, so reruns stay idempotent). Feeds the
 quarantine-rate dashboard card.
 
 ```sql
-dwh.etl_hourly_metrics (
-    run_hour TIMESTAMPTZ PRIMARY KEY,
+dwh.etl_interval_metrics (
+    run_start TIMESTAMPTZ PRIMARY KEY,
     raw_rows INT, quarantine_rows INT, quarantine_rate DOUBLE PRECISION,
     fact_rows INT, load_ts TIMESTAMPTZ DEFAULT now()
 )

@@ -103,3 +103,11 @@ def test_compose_exposes_orange_frontend():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "orange-frontend:" in compose
     assert "${ORANGE_FRONTEND_PORT:-8088}:8088" in compose
+
+
+def test_frontend_links_to_live_ten_minute_airflow_dag():
+    html = (ROOT / "frontend" / "static" / "index.html").read_text(encoding="utf-8")
+    source = (ROOT / "frontend" / "server.py").read_text(encoding="utf-8")
+    assert "/dags/ten_minute_usage_etl/grid" in html
+    assert "dwh.etl_interval_metrics" in source
+    assert '"traffic_trend": traffic_trend' in source

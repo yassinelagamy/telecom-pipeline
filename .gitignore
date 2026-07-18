@@ -25,3 +25,7 @@ data/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# local media tooling and redundant drafts
+.video-tools/
+docs/video-frames/

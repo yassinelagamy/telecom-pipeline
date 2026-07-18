@@ -63,7 +63,7 @@ def test_provisioner_uses_dimension_targets_for_field_filters():
 
 def test_quarantine_query_does_not_fake_metrics_from_fact_counts():
     sql = (ROOT / "quarantine_rate_trend.sql").read_text()
-    assert "dwh.etl_hourly_metrics" in sql
+    assert "dwh.etl_interval_metrics" in sql
     assert "dwh.fact_usage_events" not in sql
-    assert "run_hour AS hour_utc" in sql
+    assert "run_start AS interval_start" in sql
     assert "quarantine_rate::numeric" in sql

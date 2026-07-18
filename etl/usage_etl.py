@@ -109,9 +109,6 @@ def parse_run_start(value: str) -> datetime:
     return parsed
 
 
-parse_run_hour = parse_run_start
-
-
 def build_spark(settings: Settings) -> SparkSession:
     spark = (
         SparkSession.builder.appName("telecom-ten-minute-usage-etl")
@@ -139,9 +136,6 @@ def interval_paths(bucket: str, run_start: datetime) -> tuple[str, str]:
     raw = f"s3a://{bucket}/raw/usage_logs/{partition}/part-*.json.gz"
     quarantine = f"s3a://{bucket}/quarantine/usage_logs/{partition}/"
     return raw, quarantine
-
-
-hour_paths = interval_paths
 
 
 def validate_records(

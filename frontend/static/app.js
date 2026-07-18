@@ -202,7 +202,7 @@ function renderKpis() {
     kpiCard("Quarantine rate", `${formatNumber(n.quarantine_rate_pct, 2)}%`, "Target below 5%", true),
     kpiCard("Raw rows", formatNumber(n.raw_rows), "Latest hour"),
     kpiCard("Fact rows", formatNumber(n.fact_rows), "Accepted records"),
-    kpiCard("Latest run", formatDate(n.latest_hour), "UTC")
+    kpiCard("Latest run", formatDate(n.latest_interval), "UTC")
   ].join("");
   $("#heroEvents").textContent = compact(n.total_events);
   $("#heroQuality").textContent = `${formatNumber(n.quarantine_rate_pct, 2)}%`;
@@ -375,7 +375,7 @@ function drawPieChart(element, rows, labelKey, valueKey, formatter = compact, op
 /* ── Charts ───────────────────────────────────────────────────── */
 
 function renderTrafficChart() {
-  const rows = state.network.hourly;
+  const rows = state.network.traffic_trend;
   const labels = [...new Set(rows.map((row) => row.hour_utc))];
   const types = ["data", "voice", "sms"];
   const series = types.map((type) => ({
@@ -388,7 +388,7 @@ function renderTrafficChart() {
   const dashed = new Set();
   if (state.compareData) {
     // Overlay pinned state A as a dashed total line for visual comparison.
-    const rowsA = state.compareData.network.hourly;
+    const rowsA = state.compareData.network.traffic_trend;
     series.push({
       name: "A total",
       values: labels.map((hour) => rowsA
@@ -571,14 +571,14 @@ function renderWeekday() {
 
 function renderQuality() {
   const rows = state.network.quarantine;
-  drawLineChart($("#qualityChart"), rows.map((row) => row.hour_utc), [{ name: "Quarantine rate", values: rows.map((row) => row.rate_pct) }], [ORANGE], (value) => `${formatNumber(value, 1)}%`);
+  drawLineChart($("#qualityChart"), rows.map((row) => row.interval_start), [{ name: "Quarantine rate", values: rows.map((row) => row.rate_pct) }], [ORANGE], (value) => `${formatNumber(value, 1)}%`);
 }
 
 function renderQualityVolume() {
   const rows = state.network.quarantine || [];
   drawLineChart(
     $("#qualityVolumeChart"),
-    rows.map((row) => row.hour_utc),
+    rows.map((row) => row.interval_start),
     [
       { name: "Raw", values: rows.map((row) => row.raw_rows) },
       { name: "Accepted", values: rows.map((row) => row.fact_rows) },

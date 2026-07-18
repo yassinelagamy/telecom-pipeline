@@ -329,10 +329,10 @@ def metric_filters(params: dict[str, list[str]]):
     start = date_value(params, "date_from")
     end = date_value(params, "date_to")
     if start:
-        clauses.append("m.run_hour >= %s::date")
+        clauses.append("m.run_start >= %s::date")
         values.append(start)
     if end:
-        clauses.append("m.run_hour < %s::date + interval '1 day'")
+        clauses.append("m.run_start < %s::date + interval '1 day'")
         values.append(end)
     return " AND ".join(clauses), values
 
@@ -450,16 +450,16 @@ def network_payload(params: dict[str, list[str]]):
                 round(100.0 * m.quarantine_rate::numeric, 2) AS quarantine_rate_pct,
                 m.raw_rows,
                 m.fact_rows,
-                m.run_hour AS latest_hour
-            FROM dwh.etl_hourly_metrics AS m
+                m.run_start AS latest_interval
+            FROM dwh.etl_interval_metrics AS m
             WHERE {metric_where}
-            ORDER BY m.run_hour DESC
+            ORDER BY m.run_start DESC
             LIMIT 1
             """,
             metric_values,
         )
         grain = granularity_value(params)
-        hourly = many(
+        traffic_trend = many(
             cursor,
             f"""
             SELECT date_trunc('{grain}', f.event_ts) AS hour_utc,
@@ -529,12 +529,12 @@ def network_payload(params: dict[str, list[str]]):
         quarantine = many(
             cursor,
             f"""
-            SELECT m.run_hour AS hour_utc,
+            SELECT m.run_start AS interval_start,
                    round(100.0 * m.quarantine_rate::numeric, 2) AS rate_pct,
                    m.raw_rows, m.quarantine_rows, m.fact_rows
-            FROM dwh.etl_hourly_metrics AS m
+            FROM dwh.etl_interval_metrics AS m
             WHERE {metric_where}
-            ORDER BY m.run_hour
+            ORDER BY m.run_start
             """,
             metric_values,
         )
@@ -542,7 +542,7 @@ def network_payload(params: dict[str, list[str]]):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "granularity": grain,
         "kpis": {**kpis, **latest_quality},
-        "hourly": hourly,
+        "traffic_trend": traffic_trend,
         "heatmap": heatmap,
         "regions": regions,
         "service_mix": service_mix,

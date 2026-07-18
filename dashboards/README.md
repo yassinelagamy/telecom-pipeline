@@ -2,7 +2,7 @@
 
 The Metabase layer provides two Orange Egypt–styled telecom dashboards backed
 by the live Postgres warehouse. The design uses Orange `#FF7900`, black,
-charcoal, white, and neutral gray throughout. All hourly timestamps are UTC.
+charcoal, white, and neutral gray throughout. All operational timestamps are UTC.
 
 ## Dashboards
 
@@ -14,7 +14,7 @@ Shared selections: **Date**, **Usage Type**, and **Region**.
   active towers, and the latest quarantine rate.
 - Hourly traffic trend and traffic-mix visualizations.
 - Regional performance ranking and a latitude/longitude tower map.
-- Top-10 tower ranking and an hourly quarantine-rate trend.
+- Top-10 tower ranking and a ten-minute quarantine-rate trend.
 - Exportable tower performance detail for investigation and drill-through.
 
 Local URL: `http://localhost:3000/dashboard/4#refresh=600`

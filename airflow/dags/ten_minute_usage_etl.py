@@ -91,7 +91,7 @@ def raw_files_present(data_interval_start: pendulum.DateTime, **_) -> bool:
 def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
     """Fail if the interval is empty, has null FKs, or quarantine is >= 5%.
 
-    On success, upserts interval metrics into dwh.etl_hourly_metrics
+    On success, upserts interval metrics into dwh.etl_interval_metrics
     (additive ops table, see SCHEMAS.md) for the quarantine-rate dashboard.
     """
     import psycopg2
@@ -134,10 +134,10 @@ def data_quality_checks(data_interval_start: pendulum.DateTime, **_) -> None:
 
         with conn.cursor() as cur:
             cur.execute(
-                """INSERT INTO dwh.etl_hourly_metrics
-                       (run_hour, raw_rows, quarantine_rows, quarantine_rate, fact_rows)
+                """INSERT INTO dwh.etl_interval_metrics
+                       (run_start, raw_rows, quarantine_rows, quarantine_rate, fact_rows)
                    VALUES (%s, %s, %s, %s, %s)
-                   ON CONFLICT (run_hour) DO UPDATE SET
+                   ON CONFLICT (run_start) DO UPDATE SET
                        raw_rows = EXCLUDED.raw_rows,
                        quarantine_rows = EXCLUDED.quarantine_rows,
                        quarantine_rate = EXCLUDED.quarantine_rate,

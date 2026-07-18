@@ -1,6 +1,26 @@
 # Telecom Usage Data Pipeline
 
+[![CI](https://github.com/yassinelagamy/telecom-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/yassinelagamy/telecom-pipeline/actions/workflows/ci.yml)
+
 End-to-end telecom analytics pipeline: **10-minute event generation → MinIO data lake → Airflow-orchestrated PySpark ETL → star-schema Postgres warehouse → Orange Egypt analytics frontend + Metabase**.
+
+![Telecom pipeline architecture](docs/linkedin-10-minute-architecture.png)
+
+## Live proof
+
+A verified interval processed **1,917 raw events**, quarantined **30 malformed
+records (1.56%)**, and loaded **1,887 analytics-ready facts**. Consecutive
+10-minute Airflow runs completed successfully with no duplicate facts on rerun.
+
+| Airflow orchestration | Orange analytics command center |
+|---|---|
+| ![Successful Airflow task graph](docs/linkedin-airflow-pipeline-graph.png) | ![Orange analytics dashboard](docs/linkedin-orange-dashboard.png) |
+
+### Short demo
+
+[Watch the 13-second MP4 demo](docs/telecom-pipeline-demo.mp4)
+
+![Telecom pipeline demo preview](docs/telecom-pipeline-demo-preview.gif)
 
 ```
 Log Generator ──> MinIO (raw)  ──> PySpark ETL ──> Postgres DWH ──> Metabase
@@ -98,7 +118,7 @@ dwh.dim_tower      (tower_key PK, cell_tower_id UNIQUE, region, lat, lon)
 dwh.dim_date       (date_key PK, full_date, year, month, day, day_of_week, is_weekend)
 dwh.fact_usage_events (event_id PK, subscriber_key FK, tower_key FK, date_key FK,
                         event_ts, event_type, duration_sec, sms_count, bytes_up/down, load_ts)
-dwh.etl_hourly_metrics (run_hour PK, raw_rows, quarantine_rows, quarantine_rate, fact_rows, load_ts)
+dwh.etl_interval_metrics (run_start PK, raw_rows, quarantine_rows, quarantine_rate, fact_rows, load_ts)
 ```
 
 All DDL is idempotent (CREATE TABLE IF NOT EXISTS, ON CONFLICT for upserts); safe to re-run. Full schema in [SCHEMAS.md](SCHEMAS.md) and [dwh/ddl.sql](dwh/ddl.sql).
@@ -108,7 +128,7 @@ All DDL is idempotent (CREATE TABLE IF NOT EXISTS, ON CONFLICT for upserts); saf
 Each DAG run idempotently:
 
 ```sql
-DELETE FROM dwh.fact_usage_events WHERE event_ts >= :hour AND event_ts < :hour+1 hour;
+DELETE FROM dwh.fact_usage_events WHERE event_ts >= :start AND event_ts < :start+10 minutes;
 INSERT INTO dwh.fact_usage_events (...) SELECT * FROM validated_data;
 ```
 
@@ -130,7 +150,7 @@ Operational view for the NOC team:
 
 User-facing analytics:
 
-- **Quarantine rate trend** — line chart showing malformed row rate per hour (operational SLA)
+- **Quarantine rate trend** — line chart showing malformed-row rate every 10 minutes (operational SLA)
 - **Weekday vs. weekend usage** — side-by-side volume and bytes comparison
 - **Top SMS usage by city** — regional breakdown for marketing
 
@@ -254,30 +274,28 @@ docker compose restart metabase
 | D3 | Orchestrator | Airflow 2.9.3 (LocalExecutor) — industry standard, lightweight |
 | D4 | Spark runtime | PySpark 3.5.1, `local[*]` inside Airflow container — no cluster needed |
 | D5 | Warehouse model | Star schema (1 fact, 3 dims) — simple, dashboard-friendly |
-| D6 | Idempotency | Delete-hour-partition-then-insert — safe reruns, no dedup logic |
+| D6 | Idempotency | Delete-interval-then-insert — safe reruns, no dedup logic |
 | D7 | Malformed rows | Quarantine to `quarantine/` prefix — auditability, never silently dropped |
 | D8 | Timezones | UTC everywhere; `TIMESTAMPTZ` in Postgres — eliminates timezone bugs |
 | D9 | Secrets | `.env` (gitignored) + `.env.example` — no hardcoded creds |
-| D10 | Git flow | Feature branches, PR + cross-review, `main` protected — team discipline |
+| D10 | Delivery | Feature branches + GitHub Actions CI — repeatable quality checks |
 
 ## Acceptance criteria (sign-off checklist)
 
 ✅ `git clone` + `.env` + `docker compose up -d` brings up all services  
-✅ Hourly DAG runs green and is idempotent on rerun  
+✅ 10-minute DAG runs green and is idempotent on rerun
 ✅ Malformed rows land in quarantine; quarantine rate visible on a dashboard  
-✅ Both dashboards show data advancing hour over hour  
+✅ Both dashboards show data advancing every 10 minutes
 ✅ README lets a newcomer run everything without asking questions  
-✅ Repo tagged `v1.0`, pushed to GitHub, with screenshots in `docs/`  
+✅ Versioned release pushed to GitHub with architecture and live screenshots in `docs/`
 
-## Team & timeline
+## Development scope
 
-**Project:** 10 working days | **Version:** 1.0
+**Project:** 10-working-day telecom platform simulation | **Version:** 1.1
 
-**Dev A (You):** Phases 0, 1 (MinIO + Airflow + generator + 48h backfill), 3 (DAG + DQ), 4 (this README + verification)
-
-**Codex (Dev B):** Phases 1 (Postgres + Metabase + seeds), 2 (PySpark ETL), 4 (dashboards + analytics SQL)
-
-**Shared:** Phase 2 ETL pairing; Phase 4 cross-review, tag, push
+The repository covers ingestion, orchestration, distributed ETL, dimensional
+modeling, data quality, automated testing, operational analytics, and project
+documentation as one reproducible Docker Compose environment.
 
 ---
 
